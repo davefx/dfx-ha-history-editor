@@ -57,7 +57,7 @@ class HistoryEditorPanel extends HTMLElement {
         currentEntityPicker.hass = this._latestHass;
       }
       if (result === 'timeout') {
-        console.warn('ha-entity-picker took longer than 5s to define, but hass was set anyway');
+        console.warn(`ha-entity-picker took longer than ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s to define, but hass was set anyway`);
       }
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);

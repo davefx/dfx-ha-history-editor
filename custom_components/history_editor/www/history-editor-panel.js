@@ -5,7 +5,6 @@ class HistoryEditorPanel extends HTMLElement {
     this.selectedEntity = null;
     this.records = [];
     this._initialized = false;
-    this._entitiesLoaded = false;
   }
 
   connectedCallback() {

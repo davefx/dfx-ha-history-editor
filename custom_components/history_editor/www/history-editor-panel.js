@@ -18,7 +18,15 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._initialized && hass) {
       const entityPicker = this.querySelector('#entity-select');
       if (entityPicker) {
-        customElements.whenDefined('ha-entity-picker').then(() => {
+        // Wait for ha-entity-picker to be defined, with fallback
+        Promise.race([
+          customElements.whenDefined('ha-entity-picker'),
+          new Promise((resolve) => setTimeout(resolve, 5000))
+        ]).then(() => {
+          entityPicker.hass = hass;
+        }).catch((err) => {
+          console.error('Error setting hass on entity picker:', err);
+          // Try to set it anyway as a fallback
           entityPicker.hass = hass;
         });
       }
@@ -302,7 +310,15 @@ class HistoryEditorPanel extends HTMLElement {
     
     // Wait for ha-entity-picker to be defined and then set hass
     if (this._hass && entityPicker) {
-      customElements.whenDefined('ha-entity-picker').then(() => {
+      // Wait for ha-entity-picker to be defined, with fallback
+      Promise.race([
+        customElements.whenDefined('ha-entity-picker'),
+        new Promise((resolve) => setTimeout(resolve, 5000))
+      ]).then(() => {
+        entityPicker.hass = this._hass;
+      }).catch((err) => {
+        console.error('Error setting hass on entity picker:', err);
+        // Try to set it anyway as a fallback
         entityPicker.hass = this._hass;
       });
     }

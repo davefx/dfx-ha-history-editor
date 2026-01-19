@@ -6,7 +6,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import States
+from homeassistant.components.recorder.db_schema import States
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util

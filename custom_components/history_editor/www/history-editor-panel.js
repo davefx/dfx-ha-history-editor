@@ -1,15 +1,28 @@
 class HistoryEditorPanel extends HTMLElement {
   constructor() {
     super();
-    this.hass = null;
+    this._hass = null;
     this.selectedEntity = null;
     this.records = [];
+    this._initialized = false;
+  }
+
+  connectedCallback() {
+    if (!this._initialized) {
+      this._initialized = true;
+      this.renderPanel();
+    }
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this.content) {
+    if (!this._initialized) {
+      this._initialized = true;
       this.renderPanel();
+    }
+    // Update entities when hass changes
+    if (this._initialized && hass) {
+      this.loadEntities();
     }
   }
 
@@ -258,9 +271,10 @@ class HistoryEditorPanel extends HTMLElement {
       </div>
     `;
 
-    this.content = true;
     this.setupEventListeners();
-    this.loadEntities();
+    if (this._hass) {
+      this.loadEntities();
+    }
   }
 
   setupEventListeners() {

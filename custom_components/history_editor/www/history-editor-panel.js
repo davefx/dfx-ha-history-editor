@@ -18,7 +18,9 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._initialized && hass) {
       const entityPicker = this.querySelector('#entity-select');
       if (entityPicker) {
-        entityPicker.hass = hass;
+        customElements.whenDefined('ha-entity-picker').then(() => {
+          entityPicker.hass = hass;
+        });
       }
     }
   }
@@ -81,6 +83,7 @@ class HistoryEditorPanel extends HTMLElement {
           min-width: 250px;
         }
         ha-entity-picker {
+          display: block;
           min-width: 250px;
         }
         button {
@@ -297,9 +300,11 @@ class HistoryEditorPanel extends HTMLElement {
       this.saveRecord();
     });
     
-    // Set hass on entity picker when available
-    if (this._hass) {
-      entityPicker.hass = this._hass;
+    // Wait for ha-entity-picker to be defined and then set hass
+    if (this._hass && entityPicker) {
+      customElements.whenDefined('ha-entity-picker').then(() => {
+        entityPicker.hass = this._hass;
+      });
     }
   }
 

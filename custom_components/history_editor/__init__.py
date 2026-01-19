@@ -7,8 +7,9 @@ import voluptuous as vol
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import SupportsResponse
 from homeassistant.util import dt as dt_util
 
 from .panel import async_register_panel
@@ -94,16 +95,17 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.error("Error retrieving records: %s", err)
             return {"success": False, "error": str(err)}
 
-    async def get_records(call: ServiceCall) -> None:
+    async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
         entity_id = call.data["entity_id"]
         start_time = call.data.get("start_time")
         end_time = call.data.get("end_time")
         limit = call.data.get("limit", 100)
 
-        await hass.async_add_executor_job(
+        result = await hass.async_add_executor_job(
             _get_records_sync, entity_id, start_time, end_time, limit
         )
+        return result
 
     def _update_record_sync(
         state_id: int,
@@ -233,7 +235,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register services
     hass.services.async_register(
-        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA
+        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
+        supports_response=SupportsResponse.ONLY
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_RECORD, update_record, schema=SERVICE_UPDATE_RECORD_SCHEMA

@@ -1,0 +1,12 @@
+{
+  "domain": "history_editor",
+  "name": "History Editor",
+  "codeowners": ["@davefx"],
+  "config_flow": false,
+  "dependencies": ["recorder", "history"],
+  "documentation": "https://github.com/davefx/dfx-ha-history-editor",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/davefx/dfx-ha-history-editor/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

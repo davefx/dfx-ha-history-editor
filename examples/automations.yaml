@@ -1,0 +1,61 @@
+# Example Automations Using History Editor
+
+# Example 1: Automatically fix sensor spikes
+# This automation detects unrealistic temperature spikes and deletes them
+automation:
+  - alias: "Fix Temperature Spikes"
+    trigger:
+      - platform: state
+        entity_id: sensor.outdoor_temperature
+    condition:
+      - condition: template
+        value_template: "{{ trigger.to_state.state | float(0) > 50 }}"
+    action:
+      - service: history_editor.delete_record
+        data:
+          state_id: "{{ trigger.to_state.attributes.state_id }}"
+
+# Example 2: Create historical records for a new sensor
+# Useful when migrating from another system
+  - alias: "Import Historical Temperature Data"
+    trigger:
+      - platform: homeassistant
+        event: start
+    action:
+      - service: history_editor.create_record
+        data:
+          entity_id: sensor.imported_temperature
+          state: "22.5"
+          attributes:
+            unit_of_measurement: "°C"
+            device_class: temperature
+          last_changed: "2024-01-01T00:00:00"
+          last_updated: "2024-01-01T00:00:00"
+
+# Example 3: Correct a known bad reading
+# Use in a script to fix specific historical data
+script:
+  fix_sensor_reading:
+    alias: "Fix Sensor Reading"
+    sequence:
+      - service: history_editor.update_record
+        data:
+          state_id: 12345
+          state: "23.5"
+          attributes:
+            corrected: true
+            original_value: "150.0"
+          last_updated: "{{ now() }}"
+
+# Example 4: Bulk data cleanup script
+  cleanup_old_errors:
+    alias: "Cleanup Old Error States"
+    sequence:
+      # First, you'd need to get records with get_records
+      # Then iterate and delete unwanted ones
+      - service: history_editor.delete_record
+        data:
+          state_id: "{{ state_id_to_delete }}"
+
+# Note: For complex operations, consider using the Web UI
+# or writing a custom Python script that uses the services

@@ -1,0 +1,29 @@
+{
+  "title": "History Editor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "History Editor",
+        "description": "This component allows editing history records from the database."
+      }
+    }
+  },
+  "services": {
+    "get_records": {
+      "name": "Get history records",
+      "description": "Retrieve history records for an entity from the database."
+    },
+    "update_record": {
+      "name": "Update history record",
+      "description": "Update an existing history record in the database."
+    },
+    "delete_record": {
+      "name": "Delete history record",
+      "description": "Delete a history record from the database."
+    },
+    "create_record": {
+      "name": "Create history record",
+      "description": "Create a new history record in the database."
+    }
+  }
+}

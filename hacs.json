@@ -1,0 +1,6 @@
+{
+  "name": "History Editor",
+  "render_readme": true,
+  "domains": ["history_editor"],
+  "homeassistant": "2023.1.0"
+}

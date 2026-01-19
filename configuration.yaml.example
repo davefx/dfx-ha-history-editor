@@ -1,0 +1,15 @@
+# Example configuration for History Editor
+
+# Basic configuration - just enable the component
+history_editor:
+
+# The component depends on the recorder component
+# Make sure you have recorder configured in your configuration.yaml:
+#
+# recorder:
+#   db_url: sqlite:////config/home-assistant_v2.db
+#   purge_keep_days: 10
+#   commit_interval: 1
+#
+# For more information on recorder configuration, see:
+# https://www.home-assistant.io/integrations/recorder/

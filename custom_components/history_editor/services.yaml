@@ -1,0 +1,114 @@
+get_records:
+  name: Get History Records
+  description: Retrieve history records for an entity from the database.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The entity to retrieve history records for.
+      required: true
+      selector:
+        entity:
+    start_time:
+      name: Start Time
+      description: Optional start time for filtering records.
+      required: false
+      selector:
+        datetime:
+    end_time:
+      name: End Time
+      description: Optional end time for filtering records.
+      required: false
+      selector:
+        datetime:
+    limit:
+      name: Limit
+      description: Maximum number of records to return (default 100).
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 1000
+
+update_record:
+  name: Update History Record
+  description: Update an existing history record in the database.
+  fields:
+    state_id:
+      name: State ID
+      description: The ID of the state record to update.
+      required: true
+      selector:
+        number:
+          min: 1
+    state:
+      name: State
+      description: New state value.
+      required: false
+      selector:
+        text:
+    attributes:
+      name: Attributes
+      description: New attributes as JSON object.
+      required: false
+      selector:
+        object:
+    last_changed:
+      name: Last Changed
+      description: New last_changed timestamp.
+      required: false
+      selector:
+        datetime:
+    last_updated:
+      name: Last Updated
+      description: New last_updated timestamp.
+      required: false
+      selector:
+        datetime:
+
+delete_record:
+  name: Delete History Record
+  description: Delete a history record from the database.
+  fields:
+    state_id:
+      name: State ID
+      description: The ID of the state record to delete.
+      required: true
+      selector:
+        number:
+          min: 1
+
+create_record:
+  name: Create History Record
+  description: Create a new history record in the database.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The entity ID for the new record.
+      required: true
+      selector:
+        entity:
+    state:
+      name: State
+      description: State value for the new record.
+      required: true
+      selector:
+        text:
+    attributes:
+      name: Attributes
+      description: Attributes as JSON object.
+      required: false
+      selector:
+        object:
+    last_changed:
+      name: Last Changed
+      description: Timestamp for last_changed (defaults to now).
+      required: false
+      selector:
+        datetime:
+    last_updated:
+      name: Last Updated
+      description: Timestamp for last_updated (defaults to now).
+      required: false
+      selector:
+        datetime:

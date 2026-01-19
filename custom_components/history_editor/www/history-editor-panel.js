@@ -8,19 +8,13 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   connectedCallback() {
-    if (!this._initialized) {
-      this._initialized = true;
-      this.renderPanel();
-    }
+    this._ensureInitialized();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._initialized) {
-      this._initialized = true;
-      this.renderPanel();
-    }
-    // Update entities when hass changes
+    this._ensureInitialized();
+    // Load or update entities when hass is available
     if (this._initialized && hass) {
       this.loadEntities();
     }
@@ -28,6 +22,13 @@ class HistoryEditorPanel extends HTMLElement {
 
   get hass() {
     return this._hass;
+  }
+
+  _ensureInitialized() {
+    if (!this._initialized) {
+      this._initialized = true;
+      this.renderPanel();
+    }
   }
 
   renderPanel() {
@@ -272,9 +273,7 @@ class HistoryEditorPanel extends HTMLElement {
     `;
 
     this.setupEventListeners();
-    if (this._hass) {
-      this.loadEntities();
-    }
+    // Entities will be loaded via the hass setter when hass is available
   }
 
   setupEventListeners() {

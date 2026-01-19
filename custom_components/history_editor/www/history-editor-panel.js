@@ -29,10 +29,24 @@ class HistoryEditorPanel extends HTMLElement {
 
   _setEntityPickerHass(entityPicker, hass) {
     // Wait for ha-entity-picker to be defined, with 5s timeout fallback
+    const timeoutPromise = new Promise((resolve) => 
+      setTimeout(() => resolve('timeout'), 5000)
+    );
+    
     Promise.race([
       customElements.whenDefined('ha-entity-picker'),
-      new Promise((resolve) => setTimeout(resolve, 5000))
-    ]).then(() => {
+      timeoutPromise
+    ]).then((result) => {
+      // Always set hass, as the element may work even if not fully defined
+      if (entityPicker) {
+        entityPicker.hass = hass;
+      }
+      if (result === 'timeout') {
+        console.warn('ha-entity-picker took longer than 5s to define, but hass was set anyway');
+      }
+    }).catch((err) => {
+      console.error('Error waiting for ha-entity-picker:', err);
+      // Try to set hass anyway as a fallback
       if (entityPicker) {
         entityPicker.hass = hass;
       }

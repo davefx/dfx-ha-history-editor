@@ -18,23 +18,25 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._initialized && hass) {
       const entityPicker = this.querySelector('#entity-select');
       if (entityPicker) {
-        // Wait for ha-entity-picker to be defined, with fallback
-        Promise.race([
-          customElements.whenDefined('ha-entity-picker'),
-          new Promise((resolve) => setTimeout(resolve, 5000))
-        ]).then(() => {
-          entityPicker.hass = hass;
-        }).catch((err) => {
-          console.error('Error setting hass on entity picker:', err);
-          // Try to set it anyway as a fallback
-          entityPicker.hass = hass;
-        });
+        this._setEntityPickerHass(entityPicker, hass);
       }
     }
   }
 
   get hass() {
     return this._hass;
+  }
+
+  _setEntityPickerHass(entityPicker, hass) {
+    // Wait for ha-entity-picker to be defined, with 5s timeout fallback
+    Promise.race([
+      customElements.whenDefined('ha-entity-picker'),
+      new Promise((resolve) => setTimeout(resolve, 5000))
+    ]).then(() => {
+      if (entityPicker) {
+        entityPicker.hass = hass;
+      }
+    });
   }
 
   _ensureInitialized() {
@@ -310,17 +312,7 @@ class HistoryEditorPanel extends HTMLElement {
     
     // Wait for ha-entity-picker to be defined and then set hass
     if (this._hass && entityPicker) {
-      // Wait for ha-entity-picker to be defined, with fallback
-      Promise.race([
-        customElements.whenDefined('ha-entity-picker'),
-        new Promise((resolve) => setTimeout(resolve, 5000))
-      ]).then(() => {
-        entityPicker.hass = this._hass;
-      }).catch((err) => {
-        console.error('Error setting hass on entity picker:', err);
-        // Try to set it anyway as a fallback
-        entityPicker.hass = this._hass;
-      });
+      this._setEntityPickerHass(entityPicker, this._hass);
     }
   }
 

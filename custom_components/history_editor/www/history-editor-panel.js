@@ -5,7 +5,6 @@ class HistoryEditorPanel extends HTMLElement {
     this.selectedEntity = null;
     this.records = [];
     this._initialized = false;
-    this._entitiesLoaded = false;
   }
 
   connectedCallback() {
@@ -15,10 +14,12 @@ class HistoryEditorPanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._ensureInitialized();
-    // Load entities only once when hass becomes available
-    if (this._initialized && hass && !this._entitiesLoaded) {
-      this._entitiesLoaded = true;
-      this.loadEntities();
+    // Set hass on entity picker when it becomes available
+    if (this._initialized && hass) {
+      const entityPicker = this.querySelector('#entity-select');
+      if (entityPicker) {
+        entityPicker.hass = hass;
+      }
     }
   }
 
@@ -77,6 +78,9 @@ class HistoryEditorPanel extends HTMLElement {
           font-size: 14px;
         }
         select {
+          min-width: 250px;
+        }
+        ha-entity-picker {
           min-width: 250px;
         }
         button {
@@ -218,9 +222,7 @@ class HistoryEditorPanel extends HTMLElement {
       <div class="controls">
         <div class="control-group">
           <label for="entity-select">Select Entity</label>
-          <select id="entity-select">
-            <option value="">-- Choose an entity --</option>
-          </select>
+          <ha-entity-picker id="entity-select" allow-custom-entity></ha-entity-picker>
         </div>
         <div class="control-group">
           <label for="record-limit">Record Limit</label>
@@ -284,6 +286,7 @@ class HistoryEditorPanel extends HTMLElement {
     const modalClose = this.querySelector('#modal-close');
     const modalCancel = this.querySelector('#modal-cancel');
     const editForm = this.querySelector('#edit-form');
+    const entityPicker = this.querySelector('#entity-select');
 
     loadBtn.addEventListener('click', () => this.loadRecords());
     addBtn.addEventListener('click', () => this.showAddModal());
@@ -293,28 +296,17 @@ class HistoryEditorPanel extends HTMLElement {
       e.preventDefault();
       this.saveRecord();
     });
-  }
-
-  async loadEntities() {
-    if (!this._hass) return;
-
-    const entitySelect = this.querySelector('#entity-select');
-    const states = this._hass.states;
-    const entities = Object.keys(states).sort();
-
-    entitySelect.innerHTML = '<option value="">-- Choose an entity --</option>';
-    entities.forEach(entityId => {
-      const option = document.createElement('option');
-      option.value = entityId;
-      option.textContent = entityId;
-      entitySelect.appendChild(option);
-    });
+    
+    // Set hass on entity picker when available
+    if (this._hass) {
+      entityPicker.hass = this._hass;
+    }
   }
 
   async loadRecords() {
-    const entitySelect = this.querySelector('#entity-select');
+    const entityPicker = this.querySelector('#entity-select');
     const limitInput = this.querySelector('#record-limit');
-    const entityId = entitySelect.value;
+    const entityId = entityPicker.value;
 
     if (!entityId) {
       alert('Please select an entity first');
@@ -325,21 +317,32 @@ class HistoryEditorPanel extends HTMLElement {
     const limit = parseInt(limitInput.value) || 100;
 
     try {
-      const result = await this._hass.callService('history_editor', 'get_records', {
-        entity_id: entityId,
-        limit: limit
-      });
+      const result = await this._hass.callService(
+        'history_editor', 
+        'get_records', 
+        {
+          entity_id: entityId,
+          limit: limit
+        },
+        {
+          return_response: true
+        }
+      );
 
-      // Note: Service calls don't return values directly in HA
-      // We need to use a different approach - let's simulate for now
-      // In production, this would use WebSocket API to get results
-      
-      // For now, we'll show a message and user needs to check dev tools
-      this.showMessage('Records loaded. Check Home Assistant logs or use Developer Tools -> Services to view results.');
+      // Check if the service call was successful
+      if (result && result.success) {
+        this.records = result.records || [];
+        this.displayRecords(this.records);
+      } else {
+        const errorMsg = result?.error || 'Unknown error occurred';
+        alert('Error loading records: ' + errorMsg);
+        this.showMessage('Failed to load records: ' + errorMsg);
+      }
       
     } catch (error) {
       console.error('Error loading records:', error);
       alert('Error loading records: ' + error.message);
+      this.showMessage('Error loading records. Please check the console for details.');
     }
   }
 
@@ -419,13 +422,13 @@ class HistoryEditorPanel extends HTMLElement {
     const modal = this.querySelector('#edit-modal');
     const title = this.querySelector('#modal-title');
     const form = this.querySelector('#edit-form');
-    const entitySelect = this.querySelector('#entity-select');
+    const entityPicker = this.querySelector('#entity-select');
 
     title.textContent = 'Add New Record';
     form.reset();
     
     this.querySelector('#edit-state-id').value = 'NEW';
-    this.querySelector('#edit-entity-id').value = entitySelect.value || '';
+    this.querySelector('#edit-entity-id').value = entityPicker.value || '';
     this.querySelector('#edit-entity-id').readOnly = false;
     
     modal.classList.add('show');

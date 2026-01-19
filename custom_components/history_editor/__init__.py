@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import States
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
@@ -56,14 +56,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Editor component."""
     _LOGGER.info("Setting up History Editor component")
 
-    @callback
-    def get_records(call: ServiceCall) -> dict[str, Any]:
-        """Get history records for an entity."""
-        entity_id = call.data["entity_id"]
-        start_time = call.data.get("start_time")
-        end_time = call.data.get("end_time")
-        limit = call.data.get("limit", 100)
-
+    def _get_records_sync(
+        entity_id: str, start_time: datetime | None, end_time: datetime | None, limit: int
+    ) -> dict[str, Any]:
+        """Get history records for an entity (synchronous)."""
         recorder = get_instance(hass)
         if recorder is None:
             _LOGGER.error("Recorder component not available")
@@ -98,14 +94,25 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.error("Error retrieving records: %s", err)
             return {"success": False, "error": str(err)}
 
-    async def update_record(call: ServiceCall) -> dict[str, Any]:
-        """Update a history record."""
-        state_id = call.data["state_id"]
-        new_state = call.data.get("state")
-        new_attributes = call.data.get("attributes")
-        new_last_changed = call.data.get("last_changed")
-        new_last_updated = call.data.get("last_updated")
+    async def get_records(call: ServiceCall) -> None:
+        """Get history records for an entity."""
+        entity_id = call.data["entity_id"]
+        start_time = call.data.get("start_time")
+        end_time = call.data.get("end_time")
+        limit = call.data.get("limit", 100)
 
+        await hass.async_add_executor_job(
+            _get_records_sync, entity_id, start_time, end_time, limit
+        )
+
+    def _update_record_sync(
+        state_id: int,
+        new_state: str | None,
+        new_attributes: dict | None,
+        new_last_changed: datetime | None,
+        new_last_updated: datetime | None,
+    ) -> dict[str, Any]:
+        """Update a history record (synchronous)."""
         recorder = get_instance(hass)
         if recorder is None:
             _LOGGER.error("Recorder component not available")
@@ -135,10 +142,25 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.error("Error updating record: %s", err)
             return {"success": False, "error": str(err)}
 
-    async def delete_record(call: ServiceCall) -> dict[str, Any]:
-        """Delete a history record."""
+    async def update_record(call: ServiceCall) -> None:
+        """Update a history record."""
         state_id = call.data["state_id"]
+        new_state = call.data.get("state")
+        new_attributes = call.data.get("attributes")
+        new_last_changed = call.data.get("last_changed")
+        new_last_updated = call.data.get("last_updated")
 
+        await hass.async_add_executor_job(
+            _update_record_sync,
+            state_id,
+            new_state,
+            new_attributes,
+            new_last_changed,
+            new_last_updated,
+        )
+
+    def _delete_record_sync(state_id: int) -> dict[str, Any]:
+        """Delete a history record (synchronous)."""
         recorder = get_instance(hass)
         if recorder is None:
             _LOGGER.error("Recorder component not available")
@@ -160,14 +182,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.error("Error deleting record: %s", err)
             return {"success": False, "error": str(err)}
 
-    async def create_record(call: ServiceCall) -> dict[str, Any]:
-        """Create a new history record."""
-        entity_id = call.data["entity_id"]
-        state = call.data["state"]
-        attributes = call.data.get("attributes", {})
-        last_changed = call.data.get("last_changed", dt_util.utcnow())
-        last_updated = call.data.get("last_updated", dt_util.utcnow())
+    async def delete_record(call: ServiceCall) -> None:
+        """Delete a history record."""
+        state_id = call.data["state_id"]
 
+        await hass.async_add_executor_job(_delete_record_sync, state_id)
+
+    def _create_record_sync(
+        entity_id: str,
+        state: str,
+        attributes: dict,
+        last_changed: datetime | None,
+        last_updated: datetime | None,
+    ) -> dict[str, Any]:
+        """Create a new history record (synchronous)."""
         recorder = get_instance(hass)
         if recorder is None:
             _LOGGER.error("Recorder component not available")
@@ -190,6 +218,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         except Exception as err:
             _LOGGER.error("Error creating record: %s", err)
             return {"success": False, "error": str(err)}
+
+    async def create_record(call: ServiceCall) -> None:
+        """Create a new history record."""
+        entity_id = call.data["entity_id"]
+        state = call.data["state"]
+        attributes = call.data.get("attributes", {})
+        last_changed = call.data.get("last_changed", dt_util.utcnow())
+        last_updated = call.data.get("last_updated", dt_util.utcnow())
+
+        await hass.async_add_executor_job(
+            _create_record_sync, entity_id, state, attributes, last_changed, last_updated
+        )
 
     # Register services
     hass.services.async_register(

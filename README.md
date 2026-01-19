@@ -77,6 +77,8 @@ data:
 - `start_time` (optional): Filter records after this datetime
 - `end_time` (optional): Filter records before this datetime
 
+**Note:** Due to Home Assistant's service architecture, the retrieved records are logged but not returned to the caller. To view the results, check the Home Assistant logs or use the Developer Tools > Services interface with "Response Data" enabled to see the results in the UI.
+
 #### `history_editor.update_record`
 
 Update an existing history record.

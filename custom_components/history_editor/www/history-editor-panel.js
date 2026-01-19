@@ -6,6 +6,11 @@ class HistoryEditorPanel extends HTMLElement {
     this.records = [];
     this._initialized = false;
     this._entityPickerInitPromise = null;
+    this._latestHass = null;
+  }
+
+  static get ENTITY_PICKER_TIMEOUT_MS() {
+    return 5000;
   }
 
   connectedCallback() {
@@ -29,10 +34,13 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   _setEntityPickerHass(entityPicker, hass) {
+    // Store the latest hass value
+    this._latestHass = hass;
+    
     // Cache the promise to avoid creating multiple timeouts
     if (!this._entityPickerInitPromise) {
       const timeoutPromise = new Promise((resolve) => 
-        setTimeout(() => resolve('timeout'), 5000)
+        setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
       );
       
       this._entityPickerInitPromise = Promise.race([
@@ -42,9 +50,11 @@ class HistoryEditorPanel extends HTMLElement {
     }
     
     this._entityPickerInitPromise.then((result) => {
-      // Always set hass, as the element may work even if not fully defined
-      if (entityPicker) {
-        entityPicker.hass = hass;
+      // Query the entity picker again to ensure we have the current reference
+      const currentEntityPicker = this.querySelector('#entity-select');
+      // Use the latest hass value to avoid setting stale data
+      if (currentEntityPicker && this._latestHass) {
+        currentEntityPicker.hass = this._latestHass;
       }
       if (result === 'timeout') {
         console.warn('ha-entity-picker took longer than 5s to define, but hass was set anyway');
@@ -52,8 +62,9 @@ class HistoryEditorPanel extends HTMLElement {
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);
       // Try to set hass anyway as a fallback
-      if (entityPicker) {
-        entityPicker.hass = hass;
+      const currentEntityPicker = this.querySelector('#entity-select');
+      if (currentEntityPicker && this._latestHass) {
+        currentEntityPicker.hass = this._latestHass;
       }
     });
   }

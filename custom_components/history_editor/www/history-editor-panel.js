@@ -5,6 +5,7 @@ class HistoryEditorPanel extends HTMLElement {
     this.selectedEntity = null;
     this.records = [];
     this._initialized = false;
+    this._entitiesLoaded = false;
   }
 
   connectedCallback() {
@@ -12,10 +13,12 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   set hass(hass) {
+    const hadHass = this._hass !== null;
     this._hass = hass;
     this._ensureInitialized();
-    // Load or update entities when hass is available
-    if (this._initialized && hass) {
+    // Load entities only once when hass becomes available
+    if (this._initialized && hass && !this._entitiesLoaded) {
+      this._entitiesLoaded = true;
       this.loadEntities();
     }
   }

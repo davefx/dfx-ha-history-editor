@@ -13,7 +13,6 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   set hass(hass) {
-    const hadHass = this._hass !== null;
     this._hass = hass;
     this._ensureInitialized();
     // Load entities only once when hass becomes available

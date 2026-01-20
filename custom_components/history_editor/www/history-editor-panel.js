@@ -507,7 +507,7 @@ class HistoryEditorPanel extends HTMLElement {
     const dateValue = dateInput.value;
     
     if (!dateValue) {
-      alert('Please select a date and time first');
+      this.showMessage('Please select a date and time first');
       return;
     }
     
@@ -548,9 +548,16 @@ class HistoryEditorPanel extends HTMLElement {
       
       // Add date filter if a date is selected
       if (this.goToDate) {
-        // Convert the datetime-local value to ISO format
-        const selectedDate = new Date(this.goToDate);
-        serviceData.end_time = selectedDate.toISOString();
+        // Convert datetime-local input to UTC ISO format
+        // datetime-local returns 'YYYY-MM-DDTHH:MM' in local timezone
+        // We need to preserve the local time intent when converting to UTC
+        const localDateTimeStr = this.goToDate;
+        
+        // Parse as local time (browser's timezone)
+        const localDate = new Date(localDateTimeStr);
+        
+        // Convert to ISO string (UTC) for the API
+        serviceData.end_time = localDate.toISOString();
       }
 
       const result = await this._hass.callService(

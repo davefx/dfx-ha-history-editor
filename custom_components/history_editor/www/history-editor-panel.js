@@ -142,12 +142,6 @@ class HistoryEditorPanel extends HTMLElement {
             parent.replaceChild(newPicker, currentEntityPicker);
             currentEntityPicker = newPicker;
             console.debug('ha-entity-picker: Replaced uninitialized element with properly initialized element');
-            
-            // Set hass on the newly created picker
-            if (this._latestHass) {
-              this._debugLog('[HistoryEditor] Setting hass on newly replaced entity picker');
-              currentEntityPicker.hass = this._latestHass;
-            }
           } else {
             // Timeout occurred but element is still uninitialized
             // Continue watching for when the custom element gets defined

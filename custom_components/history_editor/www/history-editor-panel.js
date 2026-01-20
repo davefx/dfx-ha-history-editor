@@ -220,7 +220,7 @@ class HistoryEditorPanel extends HTMLElement {
       }
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);
-      this._updateDebugStatus('picker-ready', 'Error: ' + err.message, 'status-error');
+      this._updateDebugStatus('picker-ready', 'Initialization error ✗', 'status-error');
       // Try to set hass anyway as a fallback
       const currentEntityPicker = this.querySelector('#entity-select');
       if (currentEntityPicker && this._latestHass) {

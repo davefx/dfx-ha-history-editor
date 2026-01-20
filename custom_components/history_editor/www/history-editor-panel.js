@@ -83,40 +83,84 @@ class HistoryEditorPanel extends HTMLElement {
                                 (typeof HTMLUnknownElement !== 'undefined' && 
                                  currentEntityPicker instanceof HTMLUnknownElement);
         
-        if (isUninitialized && result !== 'timeout') {
-          // Replace with a properly created element now that the definition is available.
-          // Using document.createElement after the element is defined ensures proper initialization.
-          const parent = currentEntityPicker.parentElement;
-          const newPicker = document.createElement('ha-entity-picker');
-          
-          // Copy all attributes from the old element to preserve configuration
-          for (let i = 0; i < currentEntityPicker.attributes.length; i++) {
-            const attr = currentEntityPicker.attributes[i];
-            newPicker.setAttribute(attr.name, attr.value);
+        if (isUninitialized) {
+          if (result !== 'timeout') {
+            // Custom element is defined, so replace with a properly created element
+            // Using document.createElement after the element is defined ensures proper initialization.
+            const parent = currentEntityPicker.parentElement;
+            const newPicker = document.createElement('ha-entity-picker');
+            
+            // Copy all attributes from the old element to preserve configuration
+            for (let i = 0; i < currentEntityPicker.attributes.length; i++) {
+              const attr = currentEntityPicker.attributes[i];
+              newPicker.setAttribute(attr.name, attr.value);
+            }
+            
+            parent.replaceChild(newPicker, currentEntityPicker);
+            currentEntityPicker = newPicker;
+            console.debug('ha-entity-picker: Replaced uninitialized element with properly initialized element');
+          } else {
+            // Timeout occurred but element is still uninitialized
+            // Continue watching for when the custom element gets defined
+            console.debug(`ha-entity-picker: Still loading asynchronously after ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s`);
+            console.debug('ha-entity-picker: Will continue watching for element definition');
+            
+            customElements.whenDefined('ha-entity-picker').then(() => {
+              console.debug('ha-entity-picker: Custom element now defined, upgrading...');
+              const picker = this.querySelector('#entity-select');
+              if (picker) {
+                const isStillUninitialized = picker.constructor === HTMLElement || 
+                                            (typeof HTMLUnknownElement !== 'undefined' && 
+                                             picker instanceof HTMLUnknownElement);
+                
+                if (isStillUninitialized) {
+                  // Replace with properly initialized element
+                  const parent = picker.parentElement;
+                  const newPicker = document.createElement('ha-entity-picker');
+                  
+                  // Copy all attributes
+                  for (let i = 0; i < picker.attributes.length; i++) {
+                    const attr = picker.attributes[i];
+                    newPicker.setAttribute(attr.name, attr.value);
+                  }
+                  
+                  parent.replaceChild(newPicker, picker);
+                  
+                  // Set hass on the new picker
+                  if (this._latestHass) {
+                    newPicker.hass = this._latestHass;
+                    console.debug('ha-entity-picker: Upgraded and initialized with hass');
+                  }
+                  this._entityPickerReady = true;
+                } else {
+                  // Element was already upgraded somehow, just set hass
+                  if (this._latestHass) {
+                    picker.hass = this._latestHass;
+                    console.debug('ha-entity-picker: Element already upgraded, set hass');
+                  }
+                  this._entityPickerReady = true;
+                }
+              }
+            }).catch((err) => {
+              console.error('Error while waiting for ha-entity-picker after timeout:', err);
+              // Fallback: try to set hass on the picker anyway
+              const picker = this.querySelector('#entity-select');
+              if (picker && this._latestHass) {
+                picker.hass = this._latestHass;
+                this._entityPickerReady = true;
+              }
+            });
           }
-          
-          parent.replaceChild(newPicker, currentEntityPicker);
-          currentEntityPicker = newPicker;
-          console.debug('ha-entity-picker: Replaced uninitialized element with properly initialized element');
         }
         
-        // Use the latest hass value to avoid setting stale data
-        if (this._latestHass) {
+        // Use the latest hass value to avoid setting stale data (only if not uninitialized or timeout handled above)
+        if (!isUninitialized && this._latestHass) {
           currentEntityPicker.hass = this._latestHass;
           console.debug('ha-entity-picker: Initialized successfully with hass');
         }
         
-        // Mark the entity picker as ready
-        this._entityPickerReady = true;
-      }
-      if (result === 'timeout') {
-        // Element is still loading - this is normal for lazy-loaded components
-        console.debug(`ha-entity-picker: Still loading asynchronously after ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s`);
-        // Even on timeout, try to set hass in case the element becomes available
-        const finalPicker = this.querySelector('#entity-select');
-        if (finalPicker && this._latestHass) {
-          finalPicker.hass = this._latestHass;
-          // Mark as ready even on timeout - the element might work anyway
+        // Mark the entity picker as ready if not waiting for post-timeout initialization
+        if (!isUninitialized || result !== 'timeout') {
           this._entityPickerReady = true;
         }
       }

@@ -6,6 +6,7 @@ class HistoryEditorPanel extends HTMLElement {
     this.records = [];
     this._initialized = false;
     this._entityPickerInitPromise = null;
+    this._entityPickerInitStarted = false;
     this._latestHass = null;
   }
 
@@ -39,23 +40,33 @@ class HistoryEditorPanel extends HTMLElement {
     // Store the latest hass value
     this._latestHass = hass;
     
-    // Cache the promise to avoid creating multiple timeouts
-    if (!this._entityPickerInitPromise) {
-      const timeoutPromise = new Promise((resolve) => 
-        setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
-      );
-      
-      // Wait for ha-entity-picker to be defined. This is necessary because:
-      // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
-      // 2. When we use innerHTML to create the panel, elements aren't yet defined
-      // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
-      // 4. These placeholders don't get upgraded automatically when the custom element is defined later
-      // 5. We must detect and replace these placeholders with properly initialized elements
-      this._entityPickerInitPromise = Promise.race([
-        customElements.whenDefined('ha-entity-picker'),
-        timeoutPromise
-      ]);
+    // Only initialize the entity picker once to avoid attaching multiple callbacks
+    if (this._entityPickerInitStarted) {
+      // If initialization has already started, just update hass on the picker
+      if (entityPicker && hass) {
+        entityPicker.hass = hass;
+      }
+      return;
     }
+    
+    // Mark initialization as started
+    this._entityPickerInitStarted = true;
+    
+    // Create the timeout promise
+    const timeoutPromise = new Promise((resolve) => 
+      setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
+    );
+    
+    // Wait for ha-entity-picker to be defined. This is necessary because:
+    // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
+    // 2. When we use innerHTML to create the panel, elements aren't yet defined
+    // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
+    // 4. These placeholders don't get upgraded automatically when the custom element is defined later
+    // 5. We must detect and replace these placeholders with properly initialized elements
+    this._entityPickerInitPromise = Promise.race([
+      customElements.whenDefined('ha-entity-picker'),
+      timeoutPromise
+    ]);
     
     this._entityPickerInitPromise.then((result) => {
       // Query the entity picker again to ensure we have the current reference

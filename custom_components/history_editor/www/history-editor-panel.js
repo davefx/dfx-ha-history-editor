@@ -6,6 +6,8 @@ class HistoryEditorPanel extends HTMLElement {
     this.records = [];
     this._initialized = false;
     this._entityPickerInitPromise = null;
+    this._entityPickerInitStarted = false;
+    this._entityPickerReady = false;
     this._latestHass = null;
   }
 
@@ -39,23 +41,34 @@ class HistoryEditorPanel extends HTMLElement {
     // Store the latest hass value
     this._latestHass = hass;
     
-    // Cache the promise to avoid creating multiple timeouts
-    if (!this._entityPickerInitPromise) {
-      const timeoutPromise = new Promise((resolve) => 
-        setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
-      );
-      
-      // Wait for ha-entity-picker to be defined. This is necessary because:
-      // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
-      // 2. When we use innerHTML to create the panel, elements aren't yet defined
-      // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
-      // 4. These placeholders don't get upgraded automatically when the custom element is defined later
-      // 5. We must detect and replace these placeholders with properly initialized elements
-      this._entityPickerInitPromise = Promise.race([
-        customElements.whenDefined('ha-entity-picker'),
-        timeoutPromise
-      ]);
+    // Only initialize the entity picker once to avoid attaching multiple callbacks
+    if (this._entityPickerInitStarted) {
+      // If the picker is ready, update hass directly
+      if (this._entityPickerReady && entityPicker && hass) {
+        entityPicker.hass = hass;
+      }
+      // If not ready yet, the promise callback will use _latestHass when it resolves
+      return;
     }
+    
+    // Mark initialization as started
+    this._entityPickerInitStarted = true;
+    
+    // Create the timeout promise
+    const timeoutPromise = new Promise((resolve) => 
+      setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
+    );
+    
+    // Wait for ha-entity-picker to be defined. This is necessary because:
+    // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
+    // 2. When we use innerHTML to create the panel, elements aren't yet defined
+    // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
+    // 4. These placeholders don't get upgraded automatically when the custom element is defined later
+    // 5. We must detect and replace these placeholders with properly initialized elements
+    this._entityPickerInitPromise = Promise.race([
+      customElements.whenDefined('ha-entity-picker'),
+      timeoutPromise
+    ]);
     
     this._entityPickerInitPromise.then((result) => {
       // Query the entity picker again to ensure we have the current reference
@@ -92,6 +105,9 @@ class HistoryEditorPanel extends HTMLElement {
           currentEntityPicker.hass = this._latestHass;
           console.debug('ha-entity-picker: Initialized successfully with hass');
         }
+        
+        // Mark the entity picker as ready
+        this._entityPickerReady = true;
       }
       if (result === 'timeout') {
         // Element is still loading - this is normal for lazy-loaded components
@@ -100,6 +116,8 @@ class HistoryEditorPanel extends HTMLElement {
         const finalPicker = this.querySelector('#entity-select');
         if (finalPicker && this._latestHass) {
           finalPicker.hass = this._latestHass;
+          // Mark as ready even on timeout - the element might work anyway
+          this._entityPickerReady = true;
         }
       }
     }).catch((err) => {
@@ -108,6 +126,8 @@ class HistoryEditorPanel extends HTMLElement {
       const currentEntityPicker = this.querySelector('#entity-select');
       if (currentEntityPicker && this._latestHass) {
         currentEntityPicker.hass = this._latestHass;
+        // Mark as ready so future updates will work
+        this._entityPickerReady = true;
       }
     });
   }
@@ -120,6 +140,11 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   renderPanel() {
+    // Reset entity picker initialization state when re-rendering
+    this._entityPickerInitStarted = false;
+    this._entityPickerReady = false;
+    this._entityPickerInitPromise = null;
+    
     this.innerHTML = `
       <style>
         :host {

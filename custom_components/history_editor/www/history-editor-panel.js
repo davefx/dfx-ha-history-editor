@@ -141,6 +141,14 @@ class HistoryEditorPanel extends HTMLElement {
                   this._entityPickerReady = true;
                 }
               }
+            }).catch((err) => {
+              console.error('Error while waiting for ha-entity-picker after timeout:', err);
+              // Fallback: try to set hass on the picker anyway
+              const picker = this.querySelector('#entity-select');
+              if (picker && this._latestHass) {
+                picker.hass = this._latestHass;
+                this._entityPickerReady = true;
+              }
             });
           }
         }

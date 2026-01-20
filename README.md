@@ -169,6 +169,22 @@ data:
 - Clear your browser cache
 - Check the component is listed in `Developer Tools -> Info`
 
+### Entity picker not showing
+
+If the entity picker doesn't appear in the History Editor panel:
+
+1. **Enable Debug Mode**: Add `?debug` to the URL (e.g., `http://your-ha:8123/history-editor?debug`)
+2. **Check Debug Panel**: A debug status panel will appear showing the initialization status
+3. **Check Console**: Open browser Developer Tools (F12) and filter console by `[HistoryEditor]`
+4. **Review the [Debug Guide](DEBUG_GUIDE.md)** for detailed troubleshooting steps
+
+Common causes:
+- Browser cache preventing the ha-entity-picker component from loading
+- Home Assistant frontend not fully loaded
+- Network issues
+
+See [DEBUG_GUIDE.md](DEBUG_GUIDE.md) for detailed debugging instructions.
+
 ### Services not working
 
 - Confirm the component is loaded: Check `Developer Tools -> Services` for `history_editor.*` services

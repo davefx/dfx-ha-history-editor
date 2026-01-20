@@ -88,6 +88,10 @@ class HistoryEditorPanel extends HTMLElement {
       if (ev.detail.value && ev.detail.value.entity_id) {
         this.selectedEntity = ev.detail.value.entity_id;
         this._debugLog('[HistoryEditor] Selected entity:', this.selectedEntity);
+      } else {
+        // Handle case where entity is cleared
+        this.selectedEntity = null;
+        this._debugLog('[HistoryEditor] Entity selection cleared');
       }
     });
     
@@ -186,6 +190,10 @@ class HistoryEditorPanel extends HTMLElement {
         ha-form {
           display: block;
           width: 100%;
+        }
+        .entity-form-container {
+          flex: 1;
+          min-width: 300px;
         }
         button {
           cursor: pointer;
@@ -381,7 +389,7 @@ class HistoryEditorPanel extends HTMLElement {
       </div>` : ''}
 
       <div class="controls">
-        <div class="control-group" style="flex: 1; min-width: 300px;">
+        <div class="control-group entity-form-container">
           <ha-form id="entity-form"></ha-form>
         </div>
         <div class="control-group">

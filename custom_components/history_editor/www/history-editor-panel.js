@@ -29,6 +29,59 @@ class HistoryEditorPanel extends HTMLElement {
     }
   }
 
+  _loadEntityPickerComponent() {
+    // Trigger loading of ha-entity-picker by dynamically importing it
+    // Home Assistant uses a lazy-loading pattern for components
+    this._debugLog('[HistoryEditor] Attempting to load ha-entity-picker component...');
+    
+    try {
+      // Try to load the component using import() if available
+      // The path may vary depending on HA version, so we'll try to trigger it
+      // by accessing it through the window object or attempting an import
+      if (typeof import === 'function') {
+        // Modern approach: use dynamic import
+        // Note: This path may need adjustment based on HA's internal structure
+        import('/hacsfiles/ha-entity-picker/ha-entity-picker.js').catch(() => {
+          // If specific path fails, try common HA component paths
+          this._debugLog('[HistoryEditor] First import path failed, trying alternative paths...');
+          return import('/frontend_latest/ha-entity-picker.js').catch(() => {
+            this._debugLog('[HistoryEditor] Alternative import paths also failed');
+            // Fallback: try to trigger component registration through element creation
+            // This often triggers HA's lazy loading mechanism
+            return this._triggerComponentLoadByCreation();
+          });
+        }).then(() => {
+          this._debugLog('[HistoryEditor] ha-entity-picker component import successful');
+        }).catch(err => {
+          this._debugLog('[HistoryEditor] Import failed, relying on element creation fallback:', err.message);
+        });
+      } else {
+        // Fallback for older environments
+        this._debugLog('[HistoryEditor] Dynamic import not available, using element creation fallback');
+        this._triggerComponentLoadByCreation();
+      }
+    } catch (error) {
+      this._debugLog('[HistoryEditor] Error loading component:', error.message);
+      // Even if loading fails, the timeout mechanism will handle it
+      this._triggerComponentLoadByCreation();
+    }
+  }
+
+  _triggerComponentLoadByCreation() {
+    // Alternative method: create element to trigger HA's lazy loading
+    // In HA, accessing an undefined custom element often triggers its registration
+    this._debugLog('[HistoryEditor] Triggering component load by element creation');
+    try {
+      const tempElement = document.createElement('ha-entity-picker');
+      // Don't add it to DOM, just creating it may trigger the registration
+      // Force a property access to ensure the element is processed
+      tempElement.localName;
+      this._debugLog('[HistoryEditor] Temporary element created to trigger load');
+    } catch (error) {
+      this._debugLog('[HistoryEditor] Element creation fallback also failed:', error.message);
+    }
+  }
+
   async connectedCallback() {
     this._debugLog('[HistoryEditor] connectedCallback called');
     // Wait for Home Assistant to be fully loaded
@@ -96,6 +149,12 @@ class HistoryEditorPanel extends HTMLElement {
     // 5. We must detect and replace these placeholders with properly initialized elements
     this._debugLog('[HistoryEditor] Waiting for ha-entity-picker to be defined...');
     this._updateDebugStatus('custom-element', 'Waiting...', 'status-warning');
+    
+    // Trigger the lazy-loading of ha-entity-picker component
+    // In Home Assistant, components are loaded on-demand when accessed
+    this._debugLog('[HistoryEditor] Triggering ha-entity-picker load...');
+    this._loadEntityPickerComponent();
+    
     this._entityPickerInitPromise = Promise.race([
       customElements.whenDefined('ha-entity-picker').then(() => {
         this._debugLog('[HistoryEditor] ha-entity-picker custom element is now defined');

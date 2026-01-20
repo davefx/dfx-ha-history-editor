@@ -76,12 +76,7 @@ Look for the sequence of messages. A successful initialization looks like:
 [HistoryEditor] hass setter called, hass: defined
 [HistoryEditor] Starting entity picker initialization
 [HistoryEditor] Waiting for ha-entity-picker to be defined...
-[HistoryEditor] Triggering ha-entity-picker load...
-[HistoryEditor] Attempting to load ha-entity-picker component...
-[HistoryEditor] Triggering component load by element creation in DOM
-[HistoryEditor] Temporary element added to DOM to trigger load
 [HistoryEditor] ha-entity-picker custom element is now defined
-[HistoryEditor] Setting hass on newly replaced entity picker
 [HistoryEditor] Marking entity picker as ready
 ```
 
@@ -93,10 +88,10 @@ If you see:
 [HistoryEditor] Timeout promise resolved
 ```
 
-This means the ha-entity-picker custom element didn't load within 10 seconds. **This issue should now be fixed** with the automatic component loading. If you still see this:
-- Try clearing your browser cache completely
-- Make sure Home Assistant frontend is fully updated
-- Check browser console for any network errors preventing component loading
+This means the ha-entity-picker custom element didn't load within 10 seconds. Possible causes:
+- Home Assistant frontend not fully loaded
+- Browser cache issues
+- Network issues preventing component loading
 
 **Solution:** Refresh the page, clear browser cache, or check browser console for other errors.
 

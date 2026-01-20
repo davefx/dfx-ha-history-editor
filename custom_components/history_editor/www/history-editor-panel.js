@@ -66,30 +66,36 @@ class HistoryEditorPanel extends HTMLElement {
         // If it's still an HTMLUnknownElement or generic HTMLElement, 
         // it means the custom element wasn't properly upgraded from the innerHTML parse.
         // This happens because innerHTML creates placeholder elements before custom elements are defined.
-        const needsReplacement = currentEntityPicker.constructor === HTMLElement || 
-                                 currentEntityPicker.constructor.name === 'HTMLUnknownElement';
+        const isUninitialized = currentEntityPicker.constructor === HTMLElement || 
+                                (typeof HTMLUnknownElement !== 'undefined' && 
+                                 currentEntityPicker instanceof HTMLUnknownElement);
         
-        if (needsReplacement && result !== 'timeout') {
+        if (isUninitialized && result !== 'timeout') {
           // Replace with a properly created element now that the definition is available.
           // Using document.createElement after the element is defined ensures proper initialization.
-          console.log('Replacing ha-entity-picker with properly initialized element');
           const parent = currentEntityPicker.parentElement;
           const newPicker = document.createElement('ha-entity-picker');
-          newPicker.id = 'entity-select';
-          newPicker.setAttribute('allow-custom-entity', '');
+          
+          // Copy all attributes from the old element to preserve configuration
+          for (let i = 0; i < currentEntityPicker.attributes.length; i++) {
+            const attr = currentEntityPicker.attributes[i];
+            newPicker.setAttribute(attr.name, attr.value);
+          }
+          
           parent.replaceChild(newPicker, currentEntityPicker);
           currentEntityPicker = newPicker;
+          console.debug('ha-entity-picker: Replaced uninitialized element with properly initialized element');
         }
         
         // Use the latest hass value to avoid setting stale data
         if (this._latestHass) {
           currentEntityPicker.hass = this._latestHass;
-          console.log('ha-entity-picker initialized successfully with hass');
+          console.debug('ha-entity-picker: Initialized successfully with hass');
         }
       }
       if (result === 'timeout') {
         // Element is still loading - this is normal for lazy-loaded components
-        console.log(`ha-entity-picker is loading asynchronously (waited ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s)`);
+        console.debug(`ha-entity-picker: Still loading asynchronously after ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s`);
         // Even on timeout, try to set hass in case the element becomes available
         const finalPicker = this.querySelector('#entity-select');
         if (finalPicker && this._latestHass) {

@@ -508,6 +508,9 @@ class HistoryEditorPanel extends HTMLElement {
         {
           entity_id: entityId,
           limit: limit
+        },
+        {
+          return_response: true
         }
       );
 

@@ -22,6 +22,11 @@ class HistoryEditorPanel extends HTMLElement {
   static get ENTITY_PICKER_TIMEOUT_MS() {
     return 10000;
   }
+  
+  static get COMPONENT_LOAD_DELAY_MS() {
+    // Short delay to allow Home Assistant's lazy loader to register the component
+    return 100;
+  }
 
   _debugLog(...args) {
     if (this._debugMode) {
@@ -52,19 +57,21 @@ class HistoryEditorPanel extends HTMLElement {
       
       // Remove it after a short delay to allow HA to register the component
       setTimeout(() => {
-        document.body.removeChild(tempContainer);
-        this._debugLog('[HistoryEditor] Temporary container removed');
-      }, 100);
+        try {
+          if (tempContainer.parentNode) {
+            document.body.removeChild(tempContainer);
+            this._debugLog('[HistoryEditor] Temporary container removed');
+          }
+        } catch (removeError) {
+          // Ignore errors if container was already removed
+          this._debugLog('[HistoryEditor] Error removing temporary container (likely already removed):', removeError.message);
+        }
+      }, HistoryEditorPanel.COMPONENT_LOAD_DELAY_MS);
       
       this._debugLog('[HistoryEditor] Temporary element added to DOM to trigger load');
     } catch (error) {
       this._debugLog('[HistoryEditor] Element creation fallback failed:', error.message);
     }
-  }
-
-  _triggerComponentLoadByCreation() {
-    // This method is kept for backward compatibility but is now handled by _loadEntityPickerComponent
-    this._debugLog('[HistoryEditor] _triggerComponentLoadByCreation called (deprecated)');
   }
 
   async connectedCallback() {

@@ -7,6 +7,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._initialized = false;
     this._entityPickerInitPromise = null;
     this._entityPickerInitStarted = false;
+    this._entityPickerReady = false;
     this._latestHass = null;
   }
 
@@ -42,10 +43,11 @@ class HistoryEditorPanel extends HTMLElement {
     
     // Only initialize the entity picker once to avoid attaching multiple callbacks
     if (this._entityPickerInitStarted) {
-      // If initialization has already started, just update hass on the picker
-      if (entityPicker && hass) {
+      // If the picker is ready, update hass directly
+      if (this._entityPickerReady && entityPicker && hass) {
         entityPicker.hass = hass;
       }
+      // If not ready yet, the promise callback will use _latestHass when it resolves
       return;
     }
     
@@ -103,6 +105,9 @@ class HistoryEditorPanel extends HTMLElement {
           currentEntityPicker.hass = this._latestHass;
           console.debug('ha-entity-picker: Initialized successfully with hass');
         }
+        
+        // Mark the entity picker as ready
+        this._entityPickerReady = true;
       }
       if (result === 'timeout') {
         // Element is still loading - this is normal for lazy-loaded components
@@ -111,6 +116,8 @@ class HistoryEditorPanel extends HTMLElement {
         const finalPicker = this.querySelector('#entity-select');
         if (finalPicker && this._latestHass) {
           finalPicker.hass = this._latestHass;
+          // Mark as ready even on timeout - the element might work anyway
+          this._entityPickerReady = true;
         }
       }
     }).catch((err) => {
@@ -119,6 +126,8 @@ class HistoryEditorPanel extends HTMLElement {
       const currentEntityPicker = this.querySelector('#entity-select');
       if (currentEntityPicker && this._latestHass) {
         currentEntityPicker.hass = this._latestHass;
+        // Mark as ready so future updates will work
+        this._entityPickerReady = true;
       }
     });
   }
@@ -133,6 +142,7 @@ class HistoryEditorPanel extends HTMLElement {
   renderPanel() {
     // Reset entity picker initialization state when re-rendering
     this._entityPickerInitStarted = false;
+    this._entityPickerReady = false;
     this._entityPickerInitPromise = null;
     
     this.innerHTML = `

@@ -45,6 +45,12 @@ class HistoryEditorPanel extends HTMLElement {
         setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
       );
       
+      // Wait for ha-entity-picker to be defined. This is necessary because:
+      // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
+      // 2. When we use innerHTML to create the panel, elements aren't yet defined
+      // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
+      // 4. These placeholders don't get upgraded automatically when the custom element is defined later
+      // 5. We must detect and replace these placeholders with properly initialized elements
       this._entityPickerInitPromise = Promise.race([
         customElements.whenDefined('ha-entity-picker'),
         timeoutPromise
@@ -58,12 +64,14 @@ class HistoryEditorPanel extends HTMLElement {
       // Check if the element is actually a proper ha-entity-picker instance
       if (currentEntityPicker) {
         // If it's still an HTMLUnknownElement or generic HTMLElement, 
-        // it means the custom element wasn't properly upgraded
+        // it means the custom element wasn't properly upgraded from the innerHTML parse.
+        // This happens because innerHTML creates placeholder elements before custom elements are defined.
         const needsReplacement = currentEntityPicker.constructor === HTMLElement || 
                                  currentEntityPicker.constructor.name === 'HTMLUnknownElement';
         
         if (needsReplacement && result !== 'timeout') {
-          // Replace with a properly created element now that the definition is available
+          // Replace with a properly created element now that the definition is available.
+          // Using document.createElement after the element is defined ensures proper initialization.
           console.log('Replacing ha-entity-picker with properly initialized element');
           const parent = currentEntityPicker.parentElement;
           const newPicker = document.createElement('ha-entity-picker');

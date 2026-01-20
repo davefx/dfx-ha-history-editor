@@ -76,6 +76,7 @@ class HistoryEditorPanel extends HTMLElement {
         // Use the latest hass value to avoid setting stale data
         if (this._latestHass) {
           currentEntityPicker.hass = this._latestHass;
+          console.log('ha-entity-picker initialized successfully with hass');
         }
       }
       if (result === 'timeout') {

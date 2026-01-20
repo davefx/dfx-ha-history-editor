@@ -14,6 +14,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._initialized = false;
     this._entityFormInitialized = false; // Track if ha-form is set up
     this._statusElements = {}; // Cache for status elements
+    this.goToDate = null; // Date to load records from
   }
 
   _debugLog(...args) {
@@ -88,9 +89,13 @@ class HistoryEditorPanel extends HTMLElement {
       if (ev.detail.value && ev.detail.value.entity_id) {
         this.selectedEntity = ev.detail.value.entity_id;
         this._debugLog('[HistoryEditor] Selected entity:', this.selectedEntity);
+        // Automatically load records when entity is selected
+        this.loadRecords();
       } else {
         // Handle case where entity is cleared
         this.selectedEntity = null;
+        this.records = [];
+        this.displayRecords([]);
         this._debugLog('[HistoryEditor] Entity selection cleared');
       }
     });
@@ -396,7 +401,12 @@ class HistoryEditorPanel extends HTMLElement {
           <label for="record-limit">Record Limit</label>
           <input type="number" id="record-limit" value="100" min="1" max="1000">
         </div>
-        <button id="load-btn">Load Records</button>
+        <div class="control-group">
+          <label for="go-to-date">Go to Date/Time</label>
+          <input type="datetime-local" id="go-to-date" title="Jump to records from this date">
+        </div>
+        <button id="go-to-btn" class="secondary">Go to Date</button>
+        <button id="clear-date-btn" class="secondary">Clear Date</button>
         <button id="add-btn" class="secondary">Add New Record</button>
       </div>
 
@@ -465,14 +475,16 @@ class HistoryEditorPanel extends HTMLElement {
 
   setupEventListeners() {
     this._debugLog('[HistoryEditor] setupEventListeners called');
-    const loadBtn = this.querySelector('#load-btn');
+    const goToBtn = this.querySelector('#go-to-btn');
+    const clearDateBtn = this.querySelector('#clear-date-btn');
     const addBtn = this.querySelector('#add-btn');
     const modalClose = this.querySelector('#modal-close');
     const modalCancel = this.querySelector('#modal-cancel');
     const editForm = this.querySelector('#edit-form');
 
     this._debugLog('[HistoryEditor] Setting up event listeners on buttons');
-    loadBtn.addEventListener('click', () => this.loadRecords());
+    goToBtn.addEventListener('click', () => this.goToDate_onClick());
+    clearDateBtn.addEventListener('click', () => this.clearDate_onClick());
     addBtn.addEventListener('click', () => this.showAddModal());
     modalClose.addEventListener('click', () => this.hideModal());
     modalCancel.addEventListener('click', () => this.hideModal());
@@ -490,25 +502,61 @@ class HistoryEditorPanel extends HTMLElement {
     }
   }
 
+  goToDate_onClick() {
+    const dateInput = this.querySelector('#go-to-date');
+    const dateValue = dateInput.value;
+    
+    if (!dateValue) {
+      alert('Please select a date and time first');
+      return;
+    }
+    
+    // Store the selected date
+    this.goToDate = dateValue;
+    
+    // Reload records with the new date filter
+    this.loadRecords();
+  }
+
+  clearDate_onClick() {
+    const dateInput = this.querySelector('#go-to-date');
+    dateInput.value = '';
+    this.goToDate = null;
+    
+    // Reload records without date filter
+    if (this.selectedEntity) {
+      this.loadRecords();
+    }
+  }
+
   async loadRecords() {
     const limitInput = this.querySelector('#record-limit');
     const entityId = this.selectedEntity;
 
     if (!entityId) {
-      alert('Please select an entity first');
+      this._debugLog('[HistoryEditor] No entity selected, skipping load');
       return;
     }
 
     const limit = parseInt(limitInput.value) || 100;
 
     try {
+      const serviceData = {
+        entity_id: entityId,
+        limit: limit
+      };
+      
+      // Add date filter if a date is selected
+      if (this.goToDate) {
+        // Convert the datetime-local value to ISO format
+        const selectedDate = new Date(this.goToDate);
+        serviceData.end_time = selectedDate.toISOString();
+      }
+
       const result = await this._hass.callService(
         'history_editor', 
         'get_records', 
-        {
-          entity_id: entityId,
-          limit: limit
-        }
+        serviceData
       );
 
       // Check if the service call was successful

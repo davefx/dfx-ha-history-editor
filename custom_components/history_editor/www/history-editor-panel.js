@@ -5,6 +5,12 @@ class HistoryEditorPanel extends HTMLElement {
     this.selectedEntity = null;
     this.records = [];
     this._initialized = false;
+    this._entityPickerInitPromise = null;
+    this._latestHass = null;
+  }
+
+  static get ENTITY_PICKER_TIMEOUT_MS() {
+    return 5000;
   }
 
   connectedCallback() {
@@ -18,13 +24,49 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._initialized && hass) {
       const entityPicker = this.querySelector('#entity-select');
       if (entityPicker) {
-        entityPicker.hass = hass;
+        this._setEntityPickerHass(entityPicker, hass);
       }
     }
   }
 
   get hass() {
     return this._hass;
+  }
+
+  _setEntityPickerHass(entityPicker, hass) {
+    // Store the latest hass value
+    this._latestHass = hass;
+    
+    // Cache the promise to avoid creating multiple timeouts
+    if (!this._entityPickerInitPromise) {
+      const timeoutPromise = new Promise((resolve) => 
+        setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
+      );
+      
+      this._entityPickerInitPromise = Promise.race([
+        customElements.whenDefined('ha-entity-picker'),
+        timeoutPromise
+      ]);
+    }
+    
+    this._entityPickerInitPromise.then((result) => {
+      // Query the entity picker again to ensure we have the current reference
+      const currentEntityPicker = this.querySelector('#entity-select');
+      // Use the latest hass value to avoid setting stale data
+      if (currentEntityPicker && this._latestHass) {
+        currentEntityPicker.hass = this._latestHass;
+      }
+      if (result === 'timeout') {
+        console.warn(`ha-entity-picker took longer than ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s to define, but hass was set anyway`);
+      }
+    }).catch((err) => {
+      console.error('Error waiting for ha-entity-picker:', err);
+      // Try to set hass anyway as a fallback
+      const currentEntityPicker = this.querySelector('#entity-select');
+      if (currentEntityPicker && this._latestHass) {
+        currentEntityPicker.hass = this._latestHass;
+      }
+    });
   }
 
   _ensureInitialized() {
@@ -81,6 +123,7 @@ class HistoryEditorPanel extends HTMLElement {
           min-width: 250px;
         }
         ha-entity-picker {
+          display: block;
           min-width: 250px;
         }
         button {
@@ -297,9 +340,9 @@ class HistoryEditorPanel extends HTMLElement {
       this.saveRecord();
     });
     
-    // Set hass on entity picker when available
-    if (this._hass) {
-      entityPicker.hass = this._hass;
+    // Wait for ha-entity-picker to be defined and then set hass
+    if (this._hass && entityPicker) {
+      this._setEntityPickerHass(entityPicker, this._hass);
     }
   }
 

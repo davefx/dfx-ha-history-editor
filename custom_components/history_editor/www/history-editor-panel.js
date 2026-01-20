@@ -45,6 +45,12 @@ class HistoryEditorPanel extends HTMLElement {
         setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
       );
       
+      // Wait for ha-entity-picker to be defined. This is necessary because:
+      // 1. Home Assistant lazy-loads custom elements like ha-entity-picker
+      // 2. When we use innerHTML to create the panel, elements aren't yet defined
+      // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
+      // 4. These placeholders don't get upgraded automatically when the custom element is defined later
+      // 5. We must detect and replace these placeholders with properly initialized elements
       this._entityPickerInitPromise = Promise.race([
         customElements.whenDefined('ha-entity-picker'),
         timeoutPromise
@@ -53,14 +59,48 @@ class HistoryEditorPanel extends HTMLElement {
     
     this._entityPickerInitPromise.then((result) => {
       // Query the entity picker again to ensure we have the current reference
-      const currentEntityPicker = this.querySelector('#entity-select');
-      // Use the latest hass value to avoid setting stale data
-      if (currentEntityPicker && this._latestHass) {
-        currentEntityPicker.hass = this._latestHass;
+      let currentEntityPicker = this.querySelector('#entity-select');
+      
+      // Check if the element is actually a proper ha-entity-picker instance
+      if (currentEntityPicker) {
+        // If it's still an HTMLUnknownElement or generic HTMLElement, 
+        // it means the custom element wasn't properly upgraded from the innerHTML parse.
+        // This happens because innerHTML creates placeholder elements before custom elements are defined.
+        const isUninitialized = currentEntityPicker.constructor === HTMLElement || 
+                                (typeof HTMLUnknownElement !== 'undefined' && 
+                                 currentEntityPicker instanceof HTMLUnknownElement);
+        
+        if (isUninitialized && result !== 'timeout') {
+          // Replace with a properly created element now that the definition is available.
+          // Using document.createElement after the element is defined ensures proper initialization.
+          const parent = currentEntityPicker.parentElement;
+          const newPicker = document.createElement('ha-entity-picker');
+          
+          // Copy all attributes from the old element to preserve configuration
+          for (let i = 0; i < currentEntityPicker.attributes.length; i++) {
+            const attr = currentEntityPicker.attributes[i];
+            newPicker.setAttribute(attr.name, attr.value);
+          }
+          
+          parent.replaceChild(newPicker, currentEntityPicker);
+          currentEntityPicker = newPicker;
+          console.debug('ha-entity-picker: Replaced uninitialized element with properly initialized element');
+        }
+        
+        // Use the latest hass value to avoid setting stale data
+        if (this._latestHass) {
+          currentEntityPicker.hass = this._latestHass;
+          console.debug('ha-entity-picker: Initialized successfully with hass');
+        }
       }
       if (result === 'timeout') {
         // Element is still loading - this is normal for lazy-loaded components
-        console.log(`ha-entity-picker is loading asynchronously (waited ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s)`);
+        console.debug(`ha-entity-picker: Still loading asynchronously after ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s`);
+        // Even on timeout, try to set hass in case the element becomes available
+        const finalPicker = this.querySelector('#entity-select');
+        if (finalPicker && this._latestHass) {
+          finalPicker.hass = this._latestHass;
+        }
       }
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);

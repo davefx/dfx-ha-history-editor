@@ -47,9 +47,9 @@ Then restart Home Assistant.
 
 After installation and configuration, you'll find a new "History Editor" menu item in your Home Assistant sidebar.
 
-1. **Select an Entity**: Choose the entity whose history you want to view/edit
+1. **Select an Entity**: Choose the entity whose history you want to view/edit. Records will automatically load.
 2. **Set Record Limit**: Specify how many records to load (default: 100, max: 1000)
-3. **Load Records**: Click to fetch the historical data
+3. **Go to Date/Time** (Optional): Select a specific date and time to view records up to that point, then click "Go to Date". Use "Clear Date" to return to viewing the most recent records.
 4. **Edit**: Click the "Edit" button on any record to modify its values
 5. **Delete**: Click the "Delete" button to remove a record
 6. **Add New**: Click "Add New Record" to create a new historical entry

@@ -131,6 +131,10 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   renderPanel() {
+    // Reset entity picker initialization state when re-rendering
+    this._entityPickerInitStarted = false;
+    this._entityPickerInitPromise = null;
+    
     this.innerHTML = `
       <style>
         :host {

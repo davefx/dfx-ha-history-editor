@@ -1,6 +1,13 @@
 class HistoryEditorPanel extends HTMLElement {
   constructor() {
     super();
+    // Enable debug mode by checking URL parameter or localStorage
+    this._debugMode = new URLSearchParams(window.location.search).has('debug') || 
+                      localStorage.getItem('history_editor_debug') === 'true';
+    
+    if (this._debugMode) {
+      console.log('[HistoryEditor] Constructor called - Debug mode enabled');
+    }
     this._hass = null;
     this.selectedEntity = null;
     this.records = [];
@@ -9,25 +16,39 @@ class HistoryEditorPanel extends HTMLElement {
     this._entityPickerInitStarted = false;
     this._entityPickerReady = false;
     this._latestHass = null;
+    this._statusElements = {}; // Cache for status elements
   }
 
   static get ENTITY_PICKER_TIMEOUT_MS() {
     return 10000;
   }
 
+  _debugLog(...args) {
+    if (this._debugMode) {
+      console.log(...args);
+    }
+  }
+
   async connectedCallback() {
+    this._debugLog('[HistoryEditor] connectedCallback called');
     // Wait for Home Assistant to be fully loaded
+    this._debugLog('[HistoryEditor] Waiting for home-assistant custom element to be defined...');
     await customElements.whenDefined('home-assistant');
+    this._debugLog('[HistoryEditor] home-assistant custom element is now defined');
     this._ensureInitialized();
   }
 
   set hass(hass) {
+    this._debugLog('[HistoryEditor] hass setter called, hass:', hass ? 'defined' : 'null');
     this._hass = hass;
+    this._updateDebugStatus('hass', hass ? 'Connected ✓' : 'Not connected', hass ? 'status-ok' : 'status-error');
     this._ensureInitialized();
     // Set hass on entity picker when it becomes available
     if (this._initialized && hass) {
       const entityPicker = this.querySelector('#entity-select');
+      this._debugLog('[HistoryEditor] Looking for entity picker, found:', entityPicker ? 'yes' : 'no');
       if (entityPicker) {
+        this._debugLog('[HistoryEditor] Entity picker element type:', entityPicker.constructor.name);
         this._setEntityPickerHass(entityPicker, hass);
       }
     }
@@ -38,13 +59,16 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   _setEntityPickerHass(entityPicker, hass) {
+    this._debugLog('[HistoryEditor] _setEntityPickerHass called');
     // Store the latest hass value
     this._latestHass = hass;
     
     // Only initialize the entity picker once to avoid attaching multiple callbacks
     if (this._entityPickerInitStarted) {
+      this._debugLog('[HistoryEditor] Entity picker init already started, ready:', this._entityPickerReady);
       // If the picker is ready, update hass directly
       if (this._entityPickerReady && entityPicker && hass) {
+        this._debugLog('[HistoryEditor] Updating hass on ready entity picker');
         entityPicker.hass = hass;
       }
       // If not ready yet, the promise callback will use _latestHass when it resolves
@@ -52,11 +76,16 @@ class HistoryEditorPanel extends HTMLElement {
     }
     
     // Mark initialization as started
+    this._debugLog('[HistoryEditor] Starting entity picker initialization');
     this._entityPickerInitStarted = true;
     
     // Create the timeout promise
+    this._debugLog('[HistoryEditor] Creating timeout promise for', HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS, 'ms');
     const timeoutPromise = new Promise((resolve) => 
-      setTimeout(() => resolve('timeout'), HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
+      setTimeout(() => {
+        this._debugLog('[HistoryEditor] Timeout promise resolved');
+        resolve('timeout');
+      }, HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS)
     );
     
     // Wait for ha-entity-picker to be defined. This is necessary because:
@@ -65,35 +94,49 @@ class HistoryEditorPanel extends HTMLElement {
     // 3. HTML parser creates generic HTMLElement placeholders for unknown elements
     // 4. These placeholders don't get upgraded automatically when the custom element is defined later
     // 5. We must detect and replace these placeholders with properly initialized elements
+    this._debugLog('[HistoryEditor] Waiting for ha-entity-picker to be defined...');
+    this._updateDebugStatus('custom-element', 'Waiting...', 'status-warning');
     this._entityPickerInitPromise = Promise.race([
-      customElements.whenDefined('ha-entity-picker'),
+      customElements.whenDefined('ha-entity-picker').then(() => {
+        this._debugLog('[HistoryEditor] ha-entity-picker custom element is now defined');
+        this._updateDebugStatus('custom-element', 'Defined ✓', 'status-ok');
+        return 'defined';
+      }),
       timeoutPromise
     ]);
     
     this._entityPickerInitPromise.then((result) => {
+      this._debugLog('[HistoryEditor] Entity picker init promise resolved with:', result);
       // Query the entity picker again to ensure we have the current reference
       let currentEntityPicker = this.querySelector('#entity-select');
+      this._debugLog('[HistoryEditor] Current entity picker element:', currentEntityPicker ? 'found' : 'not found');
       
       // Check if the element is actually a proper ha-entity-picker instance
       if (currentEntityPicker) {
+        this._debugLog('[HistoryEditor] Entity picker constructor:', currentEntityPicker.constructor.name);
         // If it's still an HTMLUnknownElement or generic HTMLElement, 
         // it means the custom element wasn't properly upgraded from the innerHTML parse.
         // This happens because innerHTML creates placeholder elements before custom elements are defined.
         const isUninitialized = currentEntityPicker.constructor === HTMLElement || 
                                 (typeof HTMLUnknownElement !== 'undefined' && 
                                  currentEntityPicker instanceof HTMLUnknownElement);
+        this._debugLog('[HistoryEditor] Entity picker is uninitialized:', isUninitialized);
         
         if (isUninitialized) {
           if (result !== 'timeout') {
+            this._debugLog('[HistoryEditor] Replacing uninitialized entity picker with properly initialized element');
             // Custom element is defined, so replace with a properly created element
             // Using document.createElement after the element is defined ensures proper initialization.
             const parent = currentEntityPicker.parentElement;
+            this._debugLog('[HistoryEditor] Parent element:', parent ? parent.tagName : 'not found');
             const newPicker = document.createElement('ha-entity-picker');
+            this._debugLog('[HistoryEditor] Created new ha-entity-picker element:', newPicker.constructor.name);
             
             // Copy all attributes from the old element to preserve configuration
             for (let i = 0; i < currentEntityPicker.attributes.length; i++) {
               const attr = currentEntityPicker.attributes[i];
               newPicker.setAttribute(attr.name, attr.value);
+              this._debugLog('[HistoryEditor] Copied attribute:', attr.name, '=', attr.value);
             }
             
             parent.replaceChild(newPicker, currentEntityPicker);
@@ -132,6 +175,7 @@ class HistoryEditorPanel extends HTMLElement {
                     console.debug('ha-entity-picker: Upgraded and initialized with hass');
                   }
                   this._entityPickerReady = true;
+                  this._updateDebugStatus('picker-ready', 'Ready after async init ✓', 'status-ok');
                 } else {
                   // Element was already upgraded somehow, just set hass
                   if (this._latestHass) {
@@ -139,6 +183,7 @@ class HistoryEditorPanel extends HTMLElement {
                     console.debug('ha-entity-picker: Element already upgraded, set hass');
                   }
                   this._entityPickerReady = true;
+                  this._updateDebugStatus('picker-ready', 'Ready (already upgraded) ✓', 'status-ok');
                 }
               }
             }).catch((err) => {
@@ -155,40 +200,81 @@ class HistoryEditorPanel extends HTMLElement {
         
         // Use the latest hass value to avoid setting stale data (only if not uninitialized or timeout handled above)
         if (!isUninitialized && this._latestHass) {
+          this._debugLog('[HistoryEditor] Setting hass on initialized entity picker');
           currentEntityPicker.hass = this._latestHass;
           console.debug('ha-entity-picker: Initialized successfully with hass');
         }
         
         // Mark the entity picker as ready if not waiting for post-timeout initialization
         if (!isUninitialized || result !== 'timeout') {
+          this._debugLog('[HistoryEditor] Marking entity picker as ready');
           this._entityPickerReady = true;
+          this._updateDebugStatus('picker-ready', 'Ready ✓', 'status-ok');
+        } else {
+          this._updateDebugStatus('picker-ready', 'Waiting for async init...', 'status-warning');
         }
+      } else {
+        console.warn('[HistoryEditor] Entity picker element not found in DOM after init promise resolved!');
+        this._updateDebugStatus('picker-element', 'Not found in DOM ✗', 'status-error');
+        this._updateDebugStatus('picker-ready', 'Element missing ✗', 'status-error');
       }
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);
+      this._updateDebugStatus('picker-ready', 'Initialization error ✗', 'status-error');
       // Try to set hass anyway as a fallback
       const currentEntityPicker = this.querySelector('#entity-select');
       if (currentEntityPicker && this._latestHass) {
+        this._debugLog('[HistoryEditor] Fallback: setting hass on entity picker after error');
         currentEntityPicker.hass = this._latestHass;
         // Mark as ready so future updates will work
         this._entityPickerReady = true;
+        this._updateDebugStatus('picker-ready', 'Fallback OK ⚠', 'status-warning');
       }
     });
   }
 
   _ensureInitialized() {
+    this._debugLog('[HistoryEditor] _ensureInitialized called, initialized:', this._initialized);
     if (!this._initialized) {
+      this._debugLog('[HistoryEditor] Initializing panel for the first time');
       this._initialized = true;
       this.renderPanel();
     }
   }
 
+  _updateDebugStatus(key, value, statusClass = '') {
+    // Only update if debug mode is enabled
+    if (!this._debugMode) return;
+    
+    // Use cached element if available, otherwise query and cache
+    let element = this._statusElements[key];
+    if (!element) {
+      element = this.querySelector(`#status-${key}`);
+      if (element) {
+        this._statusElements[key] = element;
+      }
+    }
+    
+    if (element) {
+      element.textContent = value;
+      // Remove all status classes
+      element.classList.remove('status-ok', 'status-error', 'status-warning');
+      // Add the new status class if provided
+      if (statusClass) {
+        element.classList.add(statusClass);
+      }
+    }
+  }
+
   renderPanel() {
+    this._debugLog('[HistoryEditor] renderPanel called');
     // Reset entity picker initialization state when re-rendering
     this._entityPickerInitStarted = false;
     this._entityPickerReady = false;
     this._entityPickerInitPromise = null;
+    this._statusElements = {}; // Clear cached status elements
     
+    this._debugLog('[HistoryEditor] Setting innerHTML to render panel UI');
     this.innerHTML = `
       <style>
         :host {
@@ -368,11 +454,68 @@ class HistoryEditorPanel extends HTMLElement {
           overflow: hidden;
           text-overflow: ellipsis;
         }
+        .debug-status {
+          margin-bottom: 16px;
+          padding: 12px;
+          background: var(--card-background-color);
+          border: 1px solid var(--divider-color);
+          border-radius: 4px;
+          font-size: 12px;
+          font-family: monospace;
+        }
+        .debug-status .status-item {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 4px;
+        }
+        .debug-status .status-label {
+          font-weight: bold;
+          min-width: 200px;
+        }
+        .debug-status .status-value {
+          color: var(--secondary-text-color);
+        }
+        .debug-status .status-ok {
+          color: var(--success-color, green);
+        }
+        .debug-status .status-error {
+          color: var(--error-color, red);
+        }
+        .debug-status .status-warning {
+          color: var(--warning-color, orange);
+        }
       </style>
 
       <div class="header">
         <h1>🗄️ History Editor</h1>
       </div>
+
+      ${this._debugMode ? `<div class="debug-status" id="debug-status">
+        <div class="status-item">
+          <span class="status-label">Panel Status:</span>
+          <span class="status-value" id="status-panel">Initializing...</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Home Assistant Connection:</span>
+          <span class="status-value" id="status-hass">Waiting...</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Entity Picker Element:</span>
+          <span class="status-value" id="status-picker-element">Not created</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Entity Picker Ready:</span>
+          <span class="status-value" id="status-picker-ready">Not ready</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Custom Element Defined:</span>
+          <span class="status-value" id="status-custom-element">Checking...</span>
+        </div>
+        <div class="status-item" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--divider-color);">
+          <span class="status-label" style="font-size: 11px; font-style: italic;">Debug Mode:</span>
+          <span class="status-value status-ok" style="font-size: 11px;">Enabled (Add ?debug to URL or set localStorage.history_editor_debug='true')</span>
+        </div>
+      </div>` : ''}
 
       <div class="controls">
         <div class="control-group">
@@ -431,25 +574,38 @@ class HistoryEditorPanel extends HTMLElement {
       </div>
     `;
 
+    this._debugLog('[HistoryEditor] Panel UI rendered, setting up event listeners');
     this.setupEventListeners();
+    // Update debug status
+    this._updateDebugStatus('panel', 'Rendered ✓', 'status-ok');
     // Trigger entity picker initialization after rendering
     this._triggerEntityPickerLoad();
   }
   
   _triggerEntityPickerLoad() {
+    this._debugLog('[HistoryEditor] _triggerEntityPickerLoad called');
     // Force the browser to process the ha-entity-picker element
     const entityPicker = this.querySelector('#entity-select');
+    this._debugLog('[HistoryEditor] Entity picker element from DOM:', entityPicker ? 'found' : 'not found');
+    this._updateDebugStatus('picker-element', entityPicker ? `Found (${entityPicker.constructor.name})` : 'Not found ✗', entityPicker ? 'status-ok' : 'status-error');
     if (entityPicker) {
+      this._debugLog('[HistoryEditor] Entity picker type:', entityPicker.constructor.name, 'hasHass:', !!entityPicker.hass);
       // Trigger a layout to force element initialization
       entityPicker.offsetHeight;
       // Set hass if available
       if (this._hass) {
+        this._debugLog('[HistoryEditor] Setting hass on entity picker from _triggerEntityPickerLoad');
         this._setEntityPickerHass(entityPicker, this._hass);
+      } else {
+        console.warn('[HistoryEditor] hass not available yet in _triggerEntityPickerLoad');
       }
+    } else {
+      console.error('[HistoryEditor] Entity picker element not found in DOM!');
     }
   }
 
   setupEventListeners() {
+    this._debugLog('[HistoryEditor] setupEventListeners called');
     const loadBtn = this.querySelector('#load-btn');
     const addBtn = this.querySelector('#add-btn');
     const modalClose = this.querySelector('#modal-close');
@@ -457,6 +613,7 @@ class HistoryEditorPanel extends HTMLElement {
     const editForm = this.querySelector('#edit-form');
     const entityPicker = this.querySelector('#entity-select');
 
+    this._debugLog('[HistoryEditor] Setting up event listeners on buttons');
     loadBtn.addEventListener('click', () => this.loadRecords());
     addBtn.addEventListener('click', () => this.showAddModal());
     modalClose.addEventListener('click', () => this.hideModal());
@@ -468,7 +625,10 @@ class HistoryEditorPanel extends HTMLElement {
     
     // Wait for ha-entity-picker to be defined and then set hass
     if (this._hass && entityPicker) {
+      this._debugLog('[HistoryEditor] hass and entity picker both available in setupEventListeners');
       this._setEntityPickerHass(entityPicker, this._hass);
+    } else {
+      this._debugLog('[HistoryEditor] In setupEventListeners - hass:', this._hass ? 'available' : 'not available', 'entityPicker:', entityPicker ? 'found' : 'not found');
     }
   }
 

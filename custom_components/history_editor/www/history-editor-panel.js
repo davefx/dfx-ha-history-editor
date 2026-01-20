@@ -17,6 +17,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._entityPickerReady = false;
     this._latestHass = null;
     this._statusElements = {}; // Cache for status elements
+    this._componentLoadTimeoutId = null; // Track timeout for cleanup
   }
 
   static get ENTITY_PICKER_TIMEOUT_MS() {
@@ -41,6 +42,12 @@ class HistoryEditorPanel extends HTMLElement {
       return Promise.resolve();
     }
     
+    // Clear any existing timeout
+    if (this._componentLoadTimeoutId) {
+      clearTimeout(this._componentLoadTimeoutId);
+      this._componentLoadTimeoutId = null;
+    }
+    
     // Trigger loading of ha-entity-picker by dynamically importing it
     // Home Assistant uses a lazy-loading pattern for components
     this._debugLog('[HistoryEditor] Attempting to load ha-entity-picker component...');
@@ -56,7 +63,8 @@ class HistoryEditorPanel extends HTMLElement {
       document.body.appendChild(tempContainer);
       
       // Remove it after a short delay to allow HA to register the component
-      setTimeout(() => {
+      this._componentLoadTimeoutId = setTimeout(() => {
+        this._componentLoadTimeoutId = null;
         try {
           if (tempContainer.parentNode) {
             document.body.removeChild(tempContainer);

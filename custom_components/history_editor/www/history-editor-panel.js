@@ -10,10 +10,12 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   static get ENTITY_PICKER_TIMEOUT_MS() {
-    return 5000;
+    return 10000;
   }
 
-  connectedCallback() {
+  async connectedCallback() {
+    // Wait for Home Assistant to be fully loaded
+    await customElements.whenDefined('home-assistant');
     this._ensureInitialized();
   }
 
@@ -57,7 +59,8 @@ class HistoryEditorPanel extends HTMLElement {
         currentEntityPicker.hass = this._latestHass;
       }
       if (result === 'timeout') {
-        console.warn(`ha-entity-picker took longer than ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s to define, but hass was set anyway`);
+        // Element is still loading - this is normal for lazy-loaded components
+        console.log(`ha-entity-picker is loading asynchronously (waited ${HistoryEditorPanel.ENTITY_PICKER_TIMEOUT_MS / 1000}s)`);
       }
     }).catch((err) => {
       console.error('Error waiting for ha-entity-picker:', err);
@@ -123,7 +126,7 @@ class HistoryEditorPanel extends HTMLElement {
           min-width: 250px;
         }
         ha-entity-picker {
-          display: block;
+          display: block !important;
           min-width: 250px;
         }
         button {
@@ -320,7 +323,21 @@ class HistoryEditorPanel extends HTMLElement {
     `;
 
     this.setupEventListeners();
-    // Entities will be loaded via the hass setter when hass is available
+    // Trigger entity picker initialization after rendering
+    this._triggerEntityPickerLoad();
+  }
+  
+  _triggerEntityPickerLoad() {
+    // Force the browser to process the ha-entity-picker element
+    const entityPicker = this.querySelector('#entity-select');
+    if (entityPicker) {
+      // Trigger a layout to force element initialization
+      entityPicker.offsetHeight;
+      // Set hass if available
+      if (this._hass) {
+        this._setEntityPickerHass(entityPicker, this._hass);
+      }
+    }
   }
 
   setupEventListeners() {

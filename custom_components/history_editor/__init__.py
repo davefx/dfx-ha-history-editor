@@ -154,12 +154,15 @@ def _get_records_sync(
                 .filter(StatesMeta.entity_id == entity_id)
             )
             
+            # Use timestamp fields for filtering (newer schema)
             if start_time:
-                query = query.filter(States.last_updated >= start_time)
+                start_ts = start_time.timestamp()
+                query = query.filter(States.last_updated_ts >= start_ts)
             if end_time:
-                query = query.filter(States.last_updated <= end_time)
+                end_ts = end_time.timestamp()
+                query = query.filter(States.last_updated_ts <= end_ts)
             
-            query = query.order_by(States.last_updated.desc()).limit(limit)
+            query = query.order_by(States.last_updated_ts.desc()).limit(limit)
             
             _LOGGER.info("Executing query: %s", str(query))
             states = query.all()
@@ -178,13 +181,26 @@ def _get_records_sync(
                     _LOGGER.warning("Failed to parse attributes for state_id=%s", state.state_id)
                     attributes = {}
                 
+                # Handle both old (last_changed/last_updated) and new (last_changed_ts/last_updated_ts) schemas
+                last_changed_iso = None
+                if hasattr(state, 'last_changed_ts') and state.last_changed_ts is not None:
+                    last_changed_iso = dt_util.utc_from_timestamp(state.last_changed_ts).isoformat()
+                elif hasattr(state, 'last_changed') and state.last_changed is not None:
+                    last_changed_iso = state.last_changed.isoformat()
+                
+                last_updated_iso = None
+                if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                    last_updated_iso = dt_util.utc_from_timestamp(state.last_updated_ts).isoformat()
+                elif hasattr(state, 'last_updated') and state.last_updated is not None:
+                    last_updated_iso = state.last_updated.isoformat()
+                
                 records.append({
                     "state_id": state.state_id,
                     "entity_id": entity_id,  # Use the parameter instead of state.entity_id (not in new schema)
                     "state": state.state,
                     "attributes": attributes,
-                    "last_changed": state.last_changed.isoformat() if state.last_changed else None,
-                    "last_updated": state.last_updated.isoformat() if state.last_updated else None,
+                    "last_changed": last_changed_iso,
+                    "last_updated": last_updated_iso,
                 })
 
             _LOGGER.info("Retrieved %d records for entity %s", len(records), entity_id)
@@ -239,9 +255,17 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 if new_attributes is not None:
                     state.attributes = new_attributes
                 if new_last_changed is not None:
-                    state.last_changed = new_last_changed
+                    # Set both timestamp and legacy datetime fields for compatibility
+                    if hasattr(state, 'last_changed_ts'):
+                        state.last_changed_ts = new_last_changed.timestamp()
+                    if hasattr(state, 'last_changed'):
+                        state.last_changed = new_last_changed
                 if new_last_updated is not None:
-                    state.last_updated = new_last_updated
+                    # Set both timestamp and legacy datetime fields for compatibility
+                    if hasattr(state, 'last_updated_ts'):
+                        state.last_updated_ts = new_last_updated.timestamp()
+                    if hasattr(state, 'last_updated'):
+                        state.last_updated = new_last_updated
 
                 session.commit()
                 _LOGGER.info("Updated state record %s", state_id)
@@ -332,14 +356,26 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 if not hasattr(metadata, 'metadata_id') or metadata.metadata_id is None:
                     raise ValueError(f"Failed to get metadata_id for entity_id={entity_id}")
                 
-                # Create the state with metadata_id
+                # Create the state with metadata_id and timestamps
+                # Use both new timestamp fields and legacy datetime fields for compatibility
                 new_state = States(
                     metadata_id=metadata.metadata_id,
                     state=state,
                     attributes=attributes,
-                    last_changed=last_changed,
-                    last_updated=last_updated,
                 )
+                
+                # Set timestamp fields (newer schema)
+                if hasattr(new_state, 'last_changed_ts'):
+                    new_state.last_changed_ts = last_changed.timestamp() if last_changed else None
+                if hasattr(new_state, 'last_updated_ts'):
+                    new_state.last_updated_ts = last_updated.timestamp() if last_updated else None
+                
+                # Set legacy datetime fields (older schema)
+                if hasattr(new_state, 'last_changed'):
+                    new_state.last_changed = last_changed
+                if hasattr(new_state, 'last_updated'):
+                    new_state.last_updated = last_updated
+                
                 session.add(new_state)
                 session.commit()
                 session.refresh(new_state)

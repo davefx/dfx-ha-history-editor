@@ -560,11 +560,14 @@ class HistoryEditorPanel extends HTMLElement {
         serviceData.end_time = localDate.toISOString();
       }
 
+      // Call the service without return_response parameter since the service is registered
+      // with supports_response=SupportsResponse.ONLY in the backend, which automatically
+      // handles response data. Adding return_response: true causes a validation error.
+      // See: https://github.com/davefx/dfx-ha-history-editor/issues/30
       const result = await this._hass.callService(
         'history_editor', 
         'get_records', 
-        serviceData,
-        { return_response: true }
+        serviceData
       );
 
       // Check if the service call was successful

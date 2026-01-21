@@ -9,7 +9,7 @@ from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.db_schema import States
+from homeassistant.components.recorder.db_schema import States, StatesMeta
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
@@ -147,7 +147,12 @@ def _get_records_sync(
                      entity_id, start_time, end_time, limit)
         
         with recorder.get_session() as session:
-            query = session.query(States).filter(States.entity_id == entity_id)
+            # Join with StatesMeta to filter by entity_id (required for HA 2022.4+)
+            query = (
+                session.query(States)
+                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+                .filter(StatesMeta.entity_id == entity_id)
+            )
             
             if start_time:
                 query = query.filter(States.last_updated >= start_time)
@@ -175,7 +180,7 @@ def _get_records_sync(
                 
                 records.append({
                     "state_id": state.state_id,
-                    "entity_id": state.entity_id,
+                    "entity_id": entity_id,  # Use the parameter instead of state.entity_id (not in new schema)
                     "state": state.state,
                     "attributes": attributes,
                     "last_changed": state.last_changed.isoformat() if state.last_changed else None,
@@ -306,8 +311,30 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         try:
             with recorder.get_session() as session:
+                # Get or create StatesMeta for this entity_id (required for HA 2022.4+)
+                metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+                if metadata is None:
+                    # Create new metadata if it doesn't exist
+                    _LOGGER.info("Creating new StatesMeta for entity_id=%s", entity_id)
+                    try:
+                        metadata = StatesMeta(entity_id=entity_id)
+                        session.add(metadata)
+                        session.flush()  # Ensure metadata_id is generated
+                    except Exception as metadata_err:
+                        # Handle race condition - another process might have created it
+                        _LOGGER.debug("Metadata creation failed, retrying query: %s", metadata_err)
+                        session.rollback()
+                        metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+                        if metadata is None:
+                            raise  # If still not found, re-raise the original error
+                
+                # Verify metadata_id is available
+                if not hasattr(metadata, 'metadata_id') or metadata.metadata_id is None:
+                    raise ValueError(f"Failed to get metadata_id for entity_id={entity_id}")
+                
+                # Create the state with metadata_id
                 new_state = States(
-                    entity_id=entity_id,
+                    metadata_id=metadata.metadata_id,
                     state=state,
                     attributes=attributes,
                     last_changed=last_changed,
@@ -319,7 +346,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 _LOGGER.info("Created new state record for entity %s with ID %s", entity_id, new_state.state_id)
                 return {"success": True, "state_id": new_state.state_id}
         except Exception as err:
-            _LOGGER.error("Error creating record: %s", err)
+            _LOGGER.error("Error creating record: %s", err, exc_info=True)
             return {"success": False, "error": str(err)}
 
     async def create_record(call: ServiceCall) -> None:

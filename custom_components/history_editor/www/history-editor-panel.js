@@ -729,6 +729,10 @@ class HistoryEditorPanel extends HTMLElement {
     if (!isoString) return 'N/A';
     try {
       const date = new Date(isoString);
+      // Validate that the date is valid
+      if (isNaN(date.getTime())) {
+        return 'N/A';
+      }
       // Format: YYYY-MM-DD HH:MM:SS
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');

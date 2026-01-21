@@ -154,15 +154,28 @@ def _get_records_sync(
                 .filter(StatesMeta.entity_id == entity_id)
             )
             
-            # Use timestamp fields for filtering (newer schema)
+            # Use timestamp fields for filtering (newer schema) with fallback to legacy fields
             if start_time:
-                start_ts = start_time.timestamp()
-                query = query.filter(States.last_updated_ts >= start_ts)
+                if hasattr(States, 'last_updated_ts'):
+                    start_ts = start_time.timestamp()
+                    query = query.filter(States.last_updated_ts >= start_ts)
+                else:
+                    # Fallback to legacy datetime field
+                    query = query.filter(States.last_updated >= start_time)
             if end_time:
-                end_ts = end_time.timestamp()
-                query = query.filter(States.last_updated_ts <= end_ts)
+                if hasattr(States, 'last_updated_ts'):
+                    end_ts = end_time.timestamp()
+                    query = query.filter(States.last_updated_ts <= end_ts)
+                else:
+                    # Fallback to legacy datetime field
+                    query = query.filter(States.last_updated <= end_time)
             
-            query = query.order_by(States.last_updated_ts.desc()).limit(limit)
+            # Order by timestamp field (newer schema) with fallback to legacy field
+            if hasattr(States, 'last_updated_ts'):
+                query = query.order_by(States.last_updated_ts.desc()).limit(limit)
+            else:
+                # Fallback to legacy datetime field
+                query = query.order_by(States.last_updated.desc()).limit(limit)
             
             _LOGGER.info("Executing query: %s", str(query))
             states = query.all()

@@ -564,11 +564,13 @@ class HistoryEditorPanel extends HTMLElement {
       // with supports_response=SupportsResponse.ONLY in the backend, which requires
       // the frontend to explicitly request the response data.
       // See: https://github.com/davefx/dfx-ha-history-editor/issues/30
-      // The fourth parameter should be a boolean (true) not an object.
+      // The callService signature is: callService(domain, service, serviceData, target, returnResponse)
+      // Pass undefined for target (4th param) and true for returnResponse (5th param)
       const result = await this._hass.callService(
         'history_editor', 
         'get_records', 
         serviceData,
+        undefined,
         true
       );
 

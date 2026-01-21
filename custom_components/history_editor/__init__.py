@@ -9,7 +9,6 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.service import SupportsResponse
 from homeassistant.util import dt as dt_util
 
 from .panel import async_register_panel

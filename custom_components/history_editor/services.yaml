@@ -1,6 +1,8 @@
 get_records:
   name: Get History Records
   description: Retrieve history records for an entity from the database.
+  response:
+    required: true
   fields:
     entity_id:
       name: Entity ID

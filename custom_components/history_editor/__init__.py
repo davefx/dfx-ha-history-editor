@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
@@ -234,7 +234,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register services
     hass.services.async_register(
-        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA
+        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
+        supports_response=SupportsResponse.ONLY
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_RECORD, update_record, schema=SERVICE_UPDATE_RECORD_SCHEMA

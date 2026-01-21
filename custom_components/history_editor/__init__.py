@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Any
 
 import voluptuous as vol
+from aiohttp import web
 
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
@@ -52,47 +54,129 @@ SERVICE_CREATE_RECORD_SCHEMA = vol.Schema({
 })
 
 
+class GetRecordsView(HomeAssistantView):
+    """View to handle getting history records via REST API."""
+
+    url = "/api/history_editor/records"
+    name = "api:history_editor:records"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Get history records for an entity."""
+        try:
+            entity_id = request.query.get("entity_id")
+            if not entity_id:
+                return self.json(
+                    {"success": False, "error": "entity_id is required"},
+                    status_code=400
+                )
+
+            # Validate limit parameter
+            try:
+                limit = int(request.query.get("limit", 100))
+                if limit <= 0:
+                    return self.json(
+                        {"success": False, "error": "limit must be a positive integer"},
+                        status_code=400
+                    )
+            except (ValueError, TypeError):
+                return self.json(
+                    {"success": False, "error": "Invalid limit parameter"},
+                    status_code=400
+                )
+
+            start_time_str = request.query.get("start_time")
+            end_time_str = request.query.get("end_time")
+
+            start_time = None
+            end_time = None
+
+            if start_time_str:
+                try:
+                    start_time = dt_util.parse_datetime(start_time_str)
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid start_time format"},
+                        status_code=400
+                    )
+
+            if end_time_str:
+                try:
+                    end_time = dt_util.parse_datetime(end_time_str)
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid end_time format"},
+                        status_code=400
+                    )
+
+            # Get the records synchronously in executor
+            result = await self.hass.async_add_executor_job(
+                _get_records_sync, self.hass, entity_id, start_time, end_time, limit
+            )
+
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in GetRecordsView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
+def _get_records_sync(
+    hass: HomeAssistant,
+    entity_id: str,
+    start_time: datetime | None,
+    end_time: datetime | None,
+    limit: int
+) -> dict[str, Any]:
+    """Get history records for an entity (synchronous)."""
+    recorder = get_instance(hass)
+    if recorder is None:
+        _LOGGER.error("Recorder component not available")
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            query = session.query(States).filter(States.entity_id == entity_id)
+            
+            if start_time:
+                query = query.filter(States.last_updated >= start_time)
+            if end_time:
+                query = query.filter(States.last_updated <= end_time)
+            
+            query = query.order_by(States.last_updated.desc()).limit(limit)
+            states = query.all()
+
+            records = []
+            for state in states:
+                records.append({
+                    "state_id": state.state_id,
+                    "entity_id": state.entity_id,
+                    "state": state.state,
+                    "attributes": state.attributes,
+                    "last_changed": state.last_changed.isoformat() if state.last_changed else None,
+                    "last_updated": state.last_updated.isoformat() if state.last_updated else None,
+                })
+
+            _LOGGER.debug("Retrieved %d records for entity %s", len(records), entity_id)
+            return {"success": True, "records": records}
+    except Exception as err:
+        _LOGGER.error("Error retrieving records: %s", err)
+        return {"success": False, "error": str(err)}
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Editor component."""
     _LOGGER.info("Setting up History Editor component")
 
-    def _get_records_sync(
-        entity_id: str, start_time: datetime | None, end_time: datetime | None, limit: int
-    ) -> dict[str, Any]:
-        """Get history records for an entity (synchronous)."""
-        recorder = get_instance(hass)
-        if recorder is None:
-            _LOGGER.error("Recorder component not available")
-            return {"success": False, "error": "Recorder not available"}
-
-        try:
-            with recorder.get_session() as session:
-                query = session.query(States).filter(States.entity_id == entity_id)
-                
-                if start_time:
-                    query = query.filter(States.last_updated >= start_time)
-                if end_time:
-                    query = query.filter(States.last_updated <= end_time)
-                
-                query = query.order_by(States.last_updated.desc()).limit(limit)
-                states = query.all()
-
-                records = []
-                for state in states:
-                    records.append({
-                        "state_id": state.state_id,
-                        "entity_id": state.entity_id,
-                        "state": state.state,
-                        "attributes": state.attributes,
-                        "last_changed": state.last_changed.isoformat() if state.last_changed else None,
-                        "last_updated": state.last_updated.isoformat() if state.last_updated else None,
-                    })
-
-                _LOGGER.debug("Retrieved %d records for entity %s", len(records), entity_id)
-                return {"success": True, "records": records}
-        except Exception as err:
-            _LOGGER.error("Error retrieving records: %s", err)
-            return {"success": False, "error": str(err)}
+    # Register REST API view for getting records
+    hass.http.register_view(GetRecordsView(hass))
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
@@ -102,7 +186,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         limit = call.data.get("limit", 100)
 
         result = await hass.async_add_executor_job(
-            _get_records_sync, entity_id, start_time, end_time, limit
+            _get_records_sync, hass, entity_id, start_time, end_time, limit
         )
         return result
 

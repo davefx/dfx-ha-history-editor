@@ -541,10 +541,11 @@ class HistoryEditorPanel extends HTMLElement {
     const limit = parseInt(limitInput.value) || 100;
 
     try {
-      const serviceData = {
+      // Build query parameters
+      const params = new URLSearchParams({
         entity_id: entityId,
-        limit: limit
-      };
+        limit: limit.toString()
+      });
       
       // Add date filter if a date is selected
       if (this.goToDate) {
@@ -557,24 +558,26 @@ class HistoryEditorPanel extends HTMLElement {
         const localDate = new Date(localDateTimeStr);
         
         // Convert to ISO string (UTC) for the API
-        serviceData.end_time = localDate.toISOString();
+        params.append('end_time', localDate.toISOString());
       }
 
-      // Call the service with return_response: true since the service is registered
-      // with supports_response=SupportsResponse.ONLY in the backend, which requires
-      // the frontend to explicitly request the response data.
-      // See: https://github.com/davefx/dfx-ha-history-editor/issues/30
-      // The callService signature is: callService(domain, service, serviceData, target, returnResponse)
-      // Pass undefined for target (4th param) and true for returnResponse (5th param)
-      const result = await this._hass.callService(
-        'history_editor', 
-        'get_records', 
-        serviceData,
-        undefined,
-        true
-      );
+      // Use REST API instead of service call to avoid the service call API loop
+      // This breaks us out of the problematic callService() return_response parameter issues
+      const response = await fetch(`/api/history_editor/records?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+        }
+      });
 
-      // Check if the service call was successful
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      const result = await response.json();
+
+      // Check if the API call was successful
       if (result && result.success) {
         this.records = result.records || [];
         this.displayRecords(this.records);

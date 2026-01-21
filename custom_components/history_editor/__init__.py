@@ -1,4 +1,5 @@
 """History Editor component for Home Assistant."""
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -142,6 +143,9 @@ def _get_records_sync(
         return {"success": False, "error": "Recorder not available"}
 
     try:
+        _LOGGER.info("Querying records for entity_id=%s, start_time=%s, end_time=%s, limit=%d", 
+                     entity_id, start_time, end_time, limit)
+        
         with recorder.get_session() as session:
             query = session.query(States).filter(States.entity_id == entity_id)
             
@@ -151,23 +155,37 @@ def _get_records_sync(
                 query = query.filter(States.last_updated <= end_time)
             
             query = query.order_by(States.last_updated.desc()).limit(limit)
+            
+            _LOGGER.info("Executing query: %s", str(query))
             states = query.all()
+            _LOGGER.info("Query returned %d states", len(states))
 
             records = []
             for state in states:
+                # Ensure attributes is a dict (it might be a string in some DB backends)
+                try:
+                    attributes = state.attributes
+                    if isinstance(attributes, str):
+                        attributes = json.loads(attributes)
+                    elif attributes is None:
+                        attributes = {}
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    _LOGGER.warning("Failed to parse attributes for state_id=%s", state.state_id)
+                    attributes = {}
+                
                 records.append({
                     "state_id": state.state_id,
                     "entity_id": state.entity_id,
                     "state": state.state,
-                    "attributes": state.attributes,
+                    "attributes": attributes,
                     "last_changed": state.last_changed.isoformat() if state.last_changed else None,
                     "last_updated": state.last_updated.isoformat() if state.last_updated else None,
                 })
 
-            _LOGGER.debug("Retrieved %d records for entity %s", len(records), entity_id)
+            _LOGGER.info("Retrieved %d records for entity %s", len(records), entity_id)
             return {"success": True, "records": records}
     except Exception as err:
-        _LOGGER.error("Error retrieving records: %s", err)
+        _LOGGER.error("Error retrieving records: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}
 
 

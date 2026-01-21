@@ -563,12 +563,17 @@ class HistoryEditorPanel extends HTMLElement {
 
       // Use REST API instead of service call to avoid the service call API loop
       // This breaks us out of the problematic callService() return_response parameter issues
-      const response = await fetch(`/api/history_editor/records?${params.toString()}`, {
+      const url = `/api/history_editor/records?${params.toString()}`;
+      this._debugLog('[HistoryEditor] Calling API:', url);
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this._hass.auth.data.access_token}`
         }
       });
+      
+      this._debugLog('[HistoryEditor] API response status:', response.status, response.statusText);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -576,13 +581,17 @@ class HistoryEditorPanel extends HTMLElement {
       }
 
       const result = await response.json();
+      
+      this._debugLog('[HistoryEditor] API response:', result);
 
       // Check if the API call was successful
       if (result && result.success) {
         this.records = result.records || [];
+        this._debugLog('[HistoryEditor] Loaded', this.records.length, 'records');
         this.displayRecords(this.records);
       } else {
         const errorMsg = result?.error || 'Unknown error occurred';
+        this._debugLog('[HistoryEditor] API returned error:', errorMsg);
         alert('Error loading records: ' + errorMsg);
         this.showMessage('Failed to load records: ' + errorMsg);
       }

@@ -9,7 +9,6 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.service import SupportsResponse
 from homeassistant.util import dt as dt_util
 
 from .panel import async_register_panel
@@ -235,8 +234,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register services
     hass.services.async_register(
-        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
-        supports_response=SupportsResponse.ONLY
+        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_RECORD, update_record, schema=SERVICE_UPDATE_RECORD_SCHEMA

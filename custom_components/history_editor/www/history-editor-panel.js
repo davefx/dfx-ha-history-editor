@@ -563,8 +563,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await this._hass.callService(
         'history_editor', 
         'get_records', 
-        serviceData,
-        { return_response: true }
+        serviceData
       );
 
       // Check if the service call was successful

@@ -75,7 +75,20 @@ class GetRecordsView(HomeAssistantView):
                     status_code=400
                 )
 
-            limit = int(request.query.get("limit", 100))
+            # Validate limit parameter
+            try:
+                limit = int(request.query.get("limit", 100))
+                if limit <= 0:
+                    return self.json(
+                        {"success": False, "error": "limit must be a positive integer"},
+                        status_code=400
+                    )
+            except (ValueError, TypeError):
+                return self.json(
+                    {"success": False, "error": "Invalid limit parameter"},
+                    status_code=400
+                )
+
             start_time_str = request.query.get("start_time")
             end_time_str = request.query.get("end_time")
 

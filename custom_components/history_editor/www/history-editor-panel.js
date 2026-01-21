@@ -566,8 +566,7 @@ class HistoryEditorPanel extends HTMLElement {
       const response = await fetch(`/api/history_editor/records?${params.toString()}`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
         }
       });
 

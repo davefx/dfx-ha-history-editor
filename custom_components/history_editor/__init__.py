@@ -235,8 +235,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register services
     hass.services.async_register(
-        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL
+        DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_RECORD, update_record, schema=SERVICE_UPDATE_RECORD_SCHEMA

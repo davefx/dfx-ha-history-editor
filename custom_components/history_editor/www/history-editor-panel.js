@@ -481,6 +481,7 @@ class HistoryEditorPanel extends HTMLElement {
     const modalClose = this.querySelector('#modal-close');
     const modalCancel = this.querySelector('#modal-cancel');
     const editForm = this.querySelector('#edit-form');
+    const tableContainer = this.querySelector('.table-container');
 
     this._debugLog('[HistoryEditor] Setting up event listeners on buttons');
     goToBtn.addEventListener('click', () => this.goToDate_onClick());
@@ -491,6 +492,23 @@ class HistoryEditorPanel extends HTMLElement {
     editForm.addEventListener('submit', (e) => {
       e.preventDefault();
       this.saveRecord();
+    });
+    
+    // Set up event delegation for Edit and Delete buttons in the records table
+    tableContainer.addEventListener('click', (e) => {
+      const target = e.target;
+      
+      // Handle Edit button clicks
+      if (target.classList.contains('edit-btn')) {
+        const stateId = parseInt(target.dataset.stateId);
+        this.editRecord(stateId);
+      }
+      
+      // Handle Delete button clicks
+      if (target.classList.contains('delete-btn')) {
+        const stateId = parseInt(target.dataset.stateId);
+        this.deleteRecord(stateId);
+      }
     });
     
     // Set up ha-form if hass is available
@@ -658,8 +676,8 @@ class HistoryEditorPanel extends HTMLElement {
           <td>${this.formatDatetimeDisplay(record.last_changed)}</td>
           <td>${this.formatDatetimeDisplay(record.last_updated)}</td>
           <td class="actions">
-            <button class="secondary" onclick="document.querySelector('history-editor-panel').editRecord(${record.state_id})">Edit</button>
-            <button class="danger" onclick="document.querySelector('history-editor-panel').deleteRecord(${record.state_id})">Delete</button>
+            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
           </td>
         </tr>
       `;

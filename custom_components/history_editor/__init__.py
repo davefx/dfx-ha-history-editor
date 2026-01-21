@@ -129,6 +129,189 @@ class GetRecordsView(HomeAssistantView):
             )
 
 
+class UpdateRecordView(HomeAssistantView):
+    """View to handle updating history records via REST API."""
+
+    url = "/api/history_editor/update"
+    name = "api:history_editor:update"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Update a history record."""
+        try:
+            data = await request.json()
+            
+            state_id = data.get("state_id")
+            if not state_id:
+                return self.json(
+                    {"success": False, "error": "state_id is required"},
+                    status_code=400
+                )
+            
+            new_state = data.get("state")
+            new_attributes = data.get("attributes")
+            
+            # Parse datetime strings if provided
+            new_last_changed = None
+            new_last_updated = None
+            
+            if "last_changed" in data and data["last_changed"]:
+                try:
+                    new_last_changed = dt_util.parse_datetime(data["last_changed"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_changed format"},
+                        status_code=400
+                    )
+            
+            if "last_updated" in data and data["last_updated"]:
+                try:
+                    new_last_updated = dt_util.parse_datetime(data["last_updated"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_updated format"},
+                        status_code=400
+                    )
+            
+            # Update the record synchronously in executor
+            result = await self.hass.async_add_executor_job(
+                _update_record_sync,
+                self.hass,
+                int(state_id),
+                new_state,
+                new_attributes,
+                new_last_changed,
+                new_last_updated,
+            )
+            
+            return self.json(result)
+            
+        except Exception as err:
+            _LOGGER.error("Error in UpdateRecordView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
+class DeleteRecordView(HomeAssistantView):
+    """View to handle deleting history records via REST API."""
+
+    url = "/api/history_editor/delete"
+    name = "api:history_editor:delete"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Delete a history record."""
+        try:
+            data = await request.json()
+            
+            state_id = data.get("state_id")
+            if not state_id:
+                return self.json(
+                    {"success": False, "error": "state_id is required"},
+                    status_code=400
+                )
+            
+            # Delete the record synchronously in executor
+            result = await self.hass.async_add_executor_job(
+                _delete_record_sync, self.hass, int(state_id)
+            )
+            
+            return self.json(result)
+            
+        except Exception as err:
+            _LOGGER.error("Error in DeleteRecordView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
+class CreateRecordView(HomeAssistantView):
+    """View to handle creating history records via REST API."""
+
+    url = "/api/history_editor/create"
+    name = "api:history_editor:create"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Create a new history record."""
+        try:
+            data = await request.json()
+            
+            entity_id = data.get("entity_id")
+            state = data.get("state")
+            
+            if not entity_id:
+                return self.json(
+                    {"success": False, "error": "entity_id is required"},
+                    status_code=400
+                )
+            
+            if not state:
+                return self.json(
+                    {"success": False, "error": "state is required"},
+                    status_code=400
+                )
+            
+            attributes = data.get("attributes", {})
+            
+            # Parse datetime strings if provided, otherwise use current time
+            last_changed = dt_util.utcnow()
+            last_updated = dt_util.utcnow()
+            
+            if "last_changed" in data and data["last_changed"]:
+                try:
+                    last_changed = dt_util.parse_datetime(data["last_changed"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_changed format"},
+                        status_code=400
+                    )
+            
+            if "last_updated" in data and data["last_updated"]:
+                try:
+                    last_updated = dt_util.parse_datetime(data["last_updated"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_updated format"},
+                        status_code=400
+                    )
+            
+            # Create the record synchronously in executor
+            result = await self.hass.async_add_executor_job(
+                _create_record_sync,
+                self.hass,
+                entity_id,
+                state,
+                attributes,
+                last_changed,
+                last_updated,
+            )
+            
+            return self.json(result)
+            
+        except Exception as err:
+            _LOGGER.error("Error in CreateRecordView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
 def _get_records_sync(
     hass: HomeAssistant,
     entity_id: str,
@@ -227,8 +410,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Editor component."""
     _LOGGER.info("Setting up History Editor component")
 
-    # Register REST API view for getting records
+    # Register REST API views
     hass.http.register_view(GetRecordsView(hass))
+    hass.http.register_view(UpdateRecordView(hass))
+    hass.http.register_view(DeleteRecordView(hass))
+    hass.http.register_view(CreateRecordView(hass))
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
@@ -242,51 +428,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         )
         return result
 
-    def _update_record_sync(
-        state_id: int,
-        new_state: str | None,
-        new_attributes: dict | None,
-        new_last_changed: datetime | None,
-        new_last_updated: datetime | None,
-    ) -> dict[str, Any]:
-        """Update a history record (synchronous)."""
-        recorder = get_instance(hass)
-        if recorder is None:
-            _LOGGER.error("Recorder component not available")
-            return {"success": False, "error": "Recorder not available"}
-
-        try:
-            with recorder.get_session() as session:
-                state = session.query(States).filter(States.state_id == state_id).first()
-                
-                if state is None:
-                    _LOGGER.error("State with ID %s not found", state_id)
-                    return {"success": False, "error": f"State ID {state_id} not found"}
-
-                if new_state is not None:
-                    state.state = new_state
-                if new_attributes is not None:
-                    state.attributes = new_attributes
-                if new_last_changed is not None:
-                    # Set both timestamp and legacy datetime fields for compatibility
-                    if hasattr(state, 'last_changed_ts'):
-                        state.last_changed_ts = new_last_changed.timestamp()
-                    if hasattr(state, 'last_changed'):
-                        state.last_changed = new_last_changed
-                if new_last_updated is not None:
-                    # Set both timestamp and legacy datetime fields for compatibility
-                    if hasattr(state, 'last_updated_ts'):
-                        state.last_updated_ts = new_last_updated.timestamp()
-                    if hasattr(state, 'last_updated'):
-                        state.last_updated = new_last_updated
-
-                session.commit()
-                _LOGGER.info("Updated state record %s", state_id)
-                return {"success": True, "state_id": state_id}
-        except Exception as err:
-            _LOGGER.error("Error updating record: %s", err)
-            return {"success": False, "error": str(err)}
-
     async def update_record(call: ServiceCall) -> None:
         """Update a history record."""
         state_id = call.data["state_id"]
@@ -297,6 +438,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         await hass.async_add_executor_job(
             _update_record_sync,
+            hass,
             state_id,
             new_state,
             new_attributes,
@@ -304,99 +446,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             new_last_updated,
         )
 
-    def _delete_record_sync(state_id: int) -> dict[str, Any]:
-        """Delete a history record (synchronous)."""
-        recorder = get_instance(hass)
-        if recorder is None:
-            _LOGGER.error("Recorder component not available")
-            return {"success": False, "error": "Recorder not available"}
-
-        try:
-            with recorder.get_session() as session:
-                state = session.query(States).filter(States.state_id == state_id).first()
-                
-                if state is None:
-                    _LOGGER.error("State with ID %s not found", state_id)
-                    return {"success": False, "error": f"State ID {state_id} not found"}
-
-                session.delete(state)
-                session.commit()
-                _LOGGER.info("Deleted state record %s", state_id)
-                return {"success": True, "state_id": state_id}
-        except Exception as err:
-            _LOGGER.error("Error deleting record: %s", err)
-            return {"success": False, "error": str(err)}
-
     async def delete_record(call: ServiceCall) -> None:
         """Delete a history record."""
         state_id = call.data["state_id"]
 
-        await hass.async_add_executor_job(_delete_record_sync, state_id)
-
-    def _create_record_sync(
-        entity_id: str,
-        state: str,
-        attributes: dict,
-        last_changed: datetime | None,
-        last_updated: datetime | None,
-    ) -> dict[str, Any]:
-        """Create a new history record (synchronous)."""
-        recorder = get_instance(hass)
-        if recorder is None:
-            _LOGGER.error("Recorder component not available")
-            return {"success": False, "error": "Recorder not available"}
-
-        try:
-            with recorder.get_session() as session:
-                # Get or create StatesMeta for this entity_id (required for HA 2022.4+)
-                metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
-                if metadata is None:
-                    # Create new metadata if it doesn't exist
-                    _LOGGER.info("Creating new StatesMeta for entity_id=%s", entity_id)
-                    try:
-                        metadata = StatesMeta(entity_id=entity_id)
-                        session.add(metadata)
-                        session.flush()  # Ensure metadata_id is generated
-                    except Exception as metadata_err:
-                        # Handle race condition - another process might have created it
-                        _LOGGER.debug("Metadata creation failed, retrying query: %s", metadata_err)
-                        session.rollback()
-                        metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
-                        if metadata is None:
-                            raise  # If still not found, re-raise the original error
-                
-                # Verify metadata_id is available
-                if not hasattr(metadata, 'metadata_id') or metadata.metadata_id is None:
-                    raise ValueError(f"Failed to get metadata_id for entity_id={entity_id}")
-                
-                # Create the state with metadata_id and timestamps
-                # Use both new timestamp fields and legacy datetime fields for compatibility
-                new_state = States(
-                    metadata_id=metadata.metadata_id,
-                    state=state,
-                    attributes=attributes,
-                )
-                
-                # Set timestamp fields (newer schema)
-                if hasattr(new_state, 'last_changed_ts'):
-                    new_state.last_changed_ts = last_changed.timestamp() if last_changed else None
-                if hasattr(new_state, 'last_updated_ts'):
-                    new_state.last_updated_ts = last_updated.timestamp() if last_updated else None
-                
-                # Set legacy datetime fields (older schema)
-                if hasattr(new_state, 'last_changed'):
-                    new_state.last_changed = last_changed
-                if hasattr(new_state, 'last_updated'):
-                    new_state.last_updated = last_updated
-                
-                session.add(new_state)
-                session.commit()
-                session.refresh(new_state)
-                _LOGGER.info("Created new state record for entity %s with ID %s", entity_id, new_state.state_id)
-                return {"success": True, "state_id": new_state.state_id}
-        except Exception as err:
-            _LOGGER.error("Error creating record: %s", err, exc_info=True)
-            return {"success": False, "error": str(err)}
+        await hass.async_add_executor_job(_delete_record_sync, hass, state_id)
 
     async def create_record(call: ServiceCall) -> None:
         """Create a new history record."""
@@ -407,7 +461,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         last_updated = call.data.get("last_updated", dt_util.utcnow())
 
         await hass.async_add_executor_job(
-            _create_record_sync, entity_id, state, attributes, last_changed, last_updated
+            _create_record_sync, hass, entity_id, state, attributes, last_changed, last_updated
         )
 
     # Register services
@@ -430,3 +484,140 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     _LOGGER.info("History Editor component loaded successfully")
     return True
+
+def _update_record_sync(
+    hass: HomeAssistant,
+    state_id: int,
+    new_state: str | None,
+    new_attributes: dict | None,
+    new_last_changed: datetime | None,
+    new_last_updated: datetime | None,
+) -> dict[str, Any]:
+    """Update a history record (synchronous)."""
+    recorder = get_instance(hass)
+    if recorder is None:
+        _LOGGER.error("Recorder component not available")
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            state = session.query(States).filter(States.state_id == state_id).first()
+            
+            if state is None:
+                _LOGGER.error("State with ID %s not found", state_id)
+                return {"success": False, "error": f"State ID {state_id} not found"}
+
+            if new_state is not None:
+                state.state = new_state
+            if new_attributes is not None:
+                state.attributes = new_attributes
+            if new_last_changed is not None:
+                # Set both timestamp and legacy datetime fields for compatibility
+                if hasattr(state, 'last_changed_ts'):
+                    state.last_changed_ts = new_last_changed.timestamp()
+                if hasattr(state, 'last_changed'):
+                    state.last_changed = new_last_changed
+            if new_last_updated is not None:
+                # Set both timestamp and legacy datetime fields for compatibility
+                if hasattr(state, 'last_updated_ts'):
+                    state.last_updated_ts = new_last_updated.timestamp()
+                if hasattr(state, 'last_updated'):
+                    state.last_updated = new_last_updated
+
+            session.commit()
+            _LOGGER.info("Updated state record %s", state_id)
+            return {"success": True, "state_id": state_id}
+    except Exception as err:
+        _LOGGER.error("Error updating record: %s", err)
+        return {"success": False, "error": str(err)}
+
+
+def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
+    """Delete a history record (synchronous)."""
+    recorder = get_instance(hass)
+    if recorder is None:
+        _LOGGER.error("Recorder component not available")
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            state = session.query(States).filter(States.state_id == state_id).first()
+            
+            if state is None:
+                _LOGGER.error("State with ID %s not found", state_id)
+                return {"success": False, "error": f"State ID {state_id} not found"}
+
+            session.delete(state)
+            session.commit()
+            _LOGGER.info("Deleted state record %s", state_id)
+            return {"success": True, "state_id": state_id}
+    except Exception as err:
+        _LOGGER.error("Error deleting record: %s", err)
+        return {"success": False, "error": str(err)}
+
+
+def _create_record_sync(
+    hass: HomeAssistant,
+    entity_id: str,
+    state: str,
+    attributes: dict,
+    last_changed: datetime | None,
+    last_updated: datetime | None,
+) -> dict[str, Any]:
+    """Create a new history record (synchronous)."""
+    recorder = get_instance(hass)
+    if recorder is None:
+        _LOGGER.error("Recorder component not available")
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            # Get or create StatesMeta for this entity_id (required for HA 2022.4+)
+            metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+            if metadata is None:
+                # Create new metadata if it doesn't exist
+                _LOGGER.info("Creating new StatesMeta for entity_id=%s", entity_id)
+                try:
+                    metadata = StatesMeta(entity_id=entity_id)
+                    session.add(metadata)
+                    session.flush()  # Ensure metadata_id is generated
+                except Exception as metadata_err:
+                    # Handle race condition - another process might have created it
+                    _LOGGER.debug("Metadata creation failed, retrying query: %s", metadata_err)
+                    session.rollback()
+                    metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+                    if metadata is None:
+                        raise  # If still not found, re-raise the original error
+            
+            # Verify metadata_id is available
+            if not hasattr(metadata, 'metadata_id') or metadata.metadata_id is None:
+                raise ValueError(f"Failed to get metadata_id for entity_id={entity_id}")
+            
+            # Create the state with metadata_id and timestamps
+            # Use both new timestamp fields and legacy datetime fields for compatibility
+            new_state = States(
+                metadata_id=metadata.metadata_id,
+                state=state,
+                attributes=attributes,
+            )
+            
+            # Set timestamp fields (newer schema)
+            if hasattr(new_state, 'last_changed_ts'):
+                new_state.last_changed_ts = last_changed.timestamp() if last_changed else None
+            if hasattr(new_state, 'last_updated_ts'):
+                new_state.last_updated_ts = last_updated.timestamp() if last_updated else None
+            
+            # Set legacy datetime fields (older schema)
+            if hasattr(new_state, 'last_changed'):
+                new_state.last_changed = last_changed
+            if hasattr(new_state, 'last_updated'):
+                new_state.last_updated = last_updated
+            
+            session.add(new_state)
+            session.commit()
+            session.refresh(new_state)
+            _LOGGER.info("Created new state record for entity %s with ID %s", entity_id, new_state.state_id)
+            return {"success": True, "state_id": new_state.state_id}
+    except Exception as err:
+        _LOGGER.error("Error creating record: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}

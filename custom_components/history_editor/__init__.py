@@ -316,9 +316,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 if metadata is None:
                     # Create new metadata if it doesn't exist
                     _LOGGER.info("Creating new StatesMeta for entity_id=%s", entity_id)
-                    metadata = StatesMeta(entity_id=entity_id)
-                    session.add(metadata)
-                    session.flush()  # Ensure metadata_id is generated
+                    try:
+                        metadata = StatesMeta(entity_id=entity_id)
+                        session.add(metadata)
+                        session.flush()  # Ensure metadata_id is generated
+                    except Exception as metadata_err:
+                        # Handle race condition - another process might have created it
+                        _LOGGER.debug("Metadata creation failed, retrying query: %s", metadata_err)
+                        session.rollback()
+                        metadata = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+                        if metadata is None:
+                            raise  # If still not found, re-raise the original error
+                
+                # Verify metadata_id is available
+                if not hasattr(metadata, 'metadata_id') or metadata.metadata_id is None:
+                    raise ValueError(f"Failed to get metadata_id for entity_id={entity_id}")
                 
                 # Create the state with metadata_id
                 new_state = States(
@@ -334,7 +346,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 _LOGGER.info("Created new state record for entity %s with ID %s", entity_id, new_state.state_id)
                 return {"success": True, "state_id": new_state.state_id}
         except Exception as err:
-            _LOGGER.error("Error creating record: %s", err)
+            _LOGGER.error("Error creating record: %s", err, exc_info=True)
             return {"success": False, "error": str(err)}
 
     async def create_record(call: ServiceCall) -> None:

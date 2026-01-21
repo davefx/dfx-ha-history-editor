@@ -1,4 +1,5 @@
 """History Editor component for Home Assistant."""
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -163,13 +164,12 @@ def _get_records_sync(
             for state in states:
                 # Ensure attributes is a dict (it might be a string in some DB backends)
                 try:
-                    import json as json_module
                     attributes = state.attributes
                     if isinstance(attributes, str):
-                        attributes = json_module.loads(attributes)
+                        attributes = json.loads(attributes)
                     elif attributes is None:
                         attributes = {}
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, json.JSONDecodeError):
                     _LOGGER.warning("Failed to parse attributes for state_id=%s", state.state_id)
                     attributes = {}
                 

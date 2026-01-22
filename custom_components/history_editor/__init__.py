@@ -542,16 +542,13 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
 
     try:
         with recorder.get_session() as session:
-            # Use raw SQL with proper SQLAlchemy text() for safer execution
-            from sqlalchemy import text
-            
             # First check if the record exists
             state = session.query(States).filter(States.state_id == state_id).first()
             if state is None:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
-            # Delete using query.delete() which is more efficient and handles cascades
+            # Delete using query.delete() which is more efficient than session.delete()
             deleted_count = session.query(States).filter(States.state_id == state_id).delete()
             session.commit()
             

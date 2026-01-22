@@ -788,7 +788,7 @@ class HistoryEditorPanel extends HTMLElement {
         if (lastUpdated) {
           const localDate = new Date(lastUpdated);
           data.last_updated = localDate.toISOString();
-          // Set last_changed to the same value as last_updated for new records
+          // Set last_changed to the same value as last_updated for consistency
           data.last_changed = localDate.toISOString();
         }
 

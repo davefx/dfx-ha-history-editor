@@ -10,6 +10,13 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States, StatesMeta
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
+
+from .panel import async_register_panel
+
+_LOGGER = logging.getLogger(__name__)
 
 # Try to import statistics tables if available (newer HA versions)
 try:
@@ -18,13 +25,6 @@ try:
 except ImportError:
     HAS_STATISTICS_SHORT_TERM = False
     _LOGGER.debug("StatisticsShortTerm table not available in this HA version")
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.helpers import config_validation as cv
-from homeassistant.util import dt as dt_util
-
-from .panel import async_register_panel
-
-_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "history_editor"
 
@@ -562,7 +562,7 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 try:
                     stats_deleted = session.query(StatisticsShortTerm).filter(
                         StatisticsShortTerm.state_id == state_id
-                    ).delete()
+                    ).delete(synchronize_session=False)
                     if stats_deleted > 0:
                         _LOGGER.info("Deleted %d associated statistics records for state %s", stats_deleted, state_id)
                 except Exception as stats_err:
@@ -570,7 +570,7 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                     # Continue with state deletion even if statistics deletion fails
 
             # Delete using query.delete() which is more efficient than session.delete()
-            deleted_count = session.query(States).filter(States.state_id == state_id).delete()
+            deleted_count = session.query(States).filter(States.state_id == state_id).delete(synchronize_session=False)
             session.commit()
             
             if deleted_count > 0:

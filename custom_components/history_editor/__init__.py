@@ -510,7 +510,8 @@ def _update_record_sync(
             if new_state is not None:
                 state.state = new_state
             if new_attributes is not None:
-                state.attributes = new_attributes
+                # Serialize dict to JSON string for database storage
+                state.attributes = json.dumps(new_attributes)
             if new_last_changed is not None:
                 # Set both timestamp and legacy datetime fields for compatibility
                 if hasattr(state, 'last_changed_ts'):
@@ -541,19 +542,36 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
 
     try:
         with recorder.get_session() as session:
-            state = session.query(States).filter(States.state_id == state_id).first()
+            # Use raw SQL with proper SQLAlchemy text() for safer execution
+            from sqlalchemy import text
             
+            # First check if the record exists
+            state = session.query(States).filter(States.state_id == state_id).first()
             if state is None:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
-            session.delete(state)
+            # Delete using query.delete() which is more efficient and handles cascades
+            deleted_count = session.query(States).filter(States.state_id == state_id).delete()
             session.commit()
-            _LOGGER.info("Deleted state record %s", state_id)
-            return {"success": True, "state_id": state_id}
+            
+            if deleted_count > 0:
+                _LOGGER.info("Deleted state record %s", state_id)
+                return {"success": True, "state_id": state_id}
+            else:
+                return {"success": False, "error": f"Failed to delete state {state_id}"}
+                
     except Exception as err:
         _LOGGER.error("Error deleting record: %s", err)
-        return {"success": False, "error": str(err)}
+        # Provide more helpful error message for foreign key constraints
+        error_msg = str(err)
+        if "FOREIGN KEY constraint failed" in error_msg:
+            error_msg = (
+                "Cannot delete this record because it is referenced by other records in the database. "
+                "This may be a state that has associated statistics or other dependent data. "
+                f"Original error: {error_msg}"
+            )
+        return {"success": False, "error": error_msg}
 
 
 def _create_record_sync(
@@ -595,10 +613,11 @@ def _create_record_sync(
             
             # Create the state with metadata_id and timestamps
             # Use both new timestamp fields and legacy datetime fields for compatibility
+            # Serialize attributes dict to JSON string for database storage
             new_state = States(
                 metadata_id=metadata.metadata_id,
                 state=state,
-                attributes=attributes,
+                attributes=json.dumps(attributes),
             )
             
             # Set timestamp fields (newer schema)

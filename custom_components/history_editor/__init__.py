@@ -18,6 +18,14 @@ from .panel import async_register_panel
 
 _LOGGER = logging.getLogger(__name__)
 
+# Try to import statistics tables if available (newer HA versions)
+try:
+    from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+    HAS_STATISTICS_SHORT_TERM = True
+except ImportError:
+    HAS_STATISTICS_SHORT_TERM = False
+    _LOGGER.debug("StatisticsShortTerm table not available in this HA version")
+
 DOMAIN = "history_editor"
 
 # Service names
@@ -548,13 +556,26 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Delete associated statistics before deleting the state to avoid foreign key constraint errors
+            stats_deleted = 0
+            if HAS_STATISTICS_SHORT_TERM:
+                try:
+                    stats_deleted = session.query(StatisticsShortTerm).filter(
+                        StatisticsShortTerm.state_id == state_id
+                    ).delete(synchronize_session=False)
+                    if stats_deleted > 0:
+                        _LOGGER.info("Deleted %d associated statistics records for state %s", stats_deleted, state_id)
+                except Exception as stats_err:
+                    _LOGGER.warning("Error deleting statistics for state %s: %s", state_id, stats_err)
+                    # Continue with state deletion even if statistics deletion fails
+
             # Delete using query.delete() which is more efficient than session.delete()
-            deleted_count = session.query(States).filter(States.state_id == state_id).delete()
+            deleted_count = session.query(States).filter(States.state_id == state_id).delete(synchronize_session=False)
             session.commit()
             
             if deleted_count > 0:
-                _LOGGER.info("Deleted state record %s", state_id)
-                return {"success": True, "state_id": state_id}
+                _LOGGER.info("Deleted state record %s (and %d statistics)", state_id, stats_deleted)
+                return {"success": True, "state_id": state_id, "statistics_deleted": stats_deleted}
             else:
                 return {"success": False, "error": f"Failed to delete state {state_id}"}
                 

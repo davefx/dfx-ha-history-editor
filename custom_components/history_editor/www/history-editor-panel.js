@@ -438,11 +438,7 @@ class HistoryEditorPanel extends HTMLElement {
               <textarea id="edit-attributes"></textarea>
             </div>
             <div class="form-field">
-              <label>Last Changed</label>
-              <input type="datetime-local" id="edit-last-changed">
-            </div>
-            <div class="form-field">
-              <label>Last Updated</label>
+              <label>Timestamp</label>
               <input type="datetime-local" id="edit-last-updated">
             </div>
             <div class="modal-actions">
@@ -721,9 +717,6 @@ class HistoryEditorPanel extends HTMLElement {
     this.querySelector('#edit-state').value = record.state;
     this.querySelector('#edit-attributes').value = JSON.stringify(record.attributes || {}, null, 2);
     
-    if (record.last_changed) {
-      this.querySelector('#edit-last-changed').value = this.formatDatetimeLocal(record.last_changed);
-    }
     if (record.last_updated) {
       this.querySelector('#edit-last-updated').value = this.formatDatetimeLocal(record.last_updated);
     }
@@ -772,7 +765,6 @@ class HistoryEditorPanel extends HTMLElement {
     const entityId = this.querySelector('#edit-entity-id').value;
     const state = this.querySelector('#edit-state').value;
     const attributesText = this.querySelector('#edit-attributes').value;
-    const lastChanged = this.querySelector('#edit-last-changed').value;
     const lastUpdated = this.querySelector('#edit-last-updated').value;
 
     let attributes = {};
@@ -793,13 +785,11 @@ class HistoryEditorPanel extends HTMLElement {
           state: state,
           attributes: attributes
         };
-        if (lastChanged) {
-          const localDate = new Date(lastChanged);
-          data.last_changed = localDate.toISOString();
-        }
         if (lastUpdated) {
           const localDate = new Date(lastUpdated);
           data.last_updated = localDate.toISOString();
+          // Set last_changed to the same value as last_updated for consistency
+          data.last_changed = localDate.toISOString();
         }
 
         const response = await fetch('/api/history_editor/create', {
@@ -827,13 +817,11 @@ class HistoryEditorPanel extends HTMLElement {
           state: state,
           attributes: attributes
         };
-        if (lastChanged) {
-          const localDate = new Date(lastChanged);
-          data.last_changed = localDate.toISOString();
-        }
         if (lastUpdated) {
           const localDate = new Date(lastUpdated);
           data.last_updated = localDate.toISOString();
+          // Set last_changed to the same value as last_updated for consistency
+          data.last_changed = localDate.toISOString();
         }
 
         const response = await fetch('/api/history_editor/update', {

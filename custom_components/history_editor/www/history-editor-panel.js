@@ -654,8 +654,7 @@ class HistoryEditorPanel extends HTMLElement {
             <th>ID</th>
             <th>State</th>
             <th>Attributes</th>
-            <th>Last Changed</th>
-            <th>Last Updated</th>
+            <th>Timestamp</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -673,7 +672,6 @@ class HistoryEditorPanel extends HTMLElement {
           <td>${record.state_id}</td>
           <td>${this.escapeHtml(record.state)}</td>
           <td class="attribute-preview" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
-          <td>${this.formatDatetimeDisplay(record.last_changed)}</td>
           <td>${this.formatDatetimeDisplay(record.last_updated)}</td>
           <td class="actions">
             <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>

@@ -795,11 +795,33 @@ class HistoryEditorPanel extends HTMLElement {
           state: state,
           attributes: attributes
         };
-        if (lastChanged) data.last_changed = lastChanged;
-        if (lastUpdated) data.last_updated = lastUpdated;
+        if (lastChanged) {
+          const localDate = new Date(lastChanged);
+          data.last_changed = localDate.toISOString();
+        }
+        if (lastUpdated) {
+          const localDate = new Date(lastUpdated);
+          data.last_updated = localDate.toISOString();
+        }
 
-        await this._hass.callService('history_editor', 'create_record', data);
-        alert('Record created successfully');
+        const response = await fetch('/api/history_editor/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+          },
+          body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          alert('Record created successfully');
+          this.hideModal();
+          this.loadRecords();
+        } else {
+          alert('Error creating record: ' + (result.error || 'Unknown error'));
+        }
       } else {
         // Update existing record
         const data = {
@@ -807,15 +829,34 @@ class HistoryEditorPanel extends HTMLElement {
           state: state,
           attributes: attributes
         };
-        if (lastChanged) data.last_changed = lastChanged;
-        if (lastUpdated) data.last_updated = lastUpdated;
+        if (lastChanged) {
+          const localDate = new Date(lastChanged);
+          data.last_changed = localDate.toISOString();
+        }
+        if (lastUpdated) {
+          const localDate = new Date(lastUpdated);
+          data.last_updated = localDate.toISOString();
+        }
 
-        await this._hass.callService('history_editor', 'update_record', data);
-        alert('Record updated successfully');
+        const response = await fetch('/api/history_editor/update', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+          },
+          body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          alert('Record updated successfully');
+          this.hideModal();
+          this.loadRecords();
+        } else {
+          alert('Error updating record: ' + (result.error || 'Unknown error'));
+        }
       }
-
-      this.hideModal();
-      this.loadRecords();
     } catch (error) {
       console.error('Error saving record:', error);
       alert('Error saving record: ' + error.message);
@@ -828,11 +869,25 @@ class HistoryEditorPanel extends HTMLElement {
     }
 
     try {
-      await this._hass.callService('history_editor', 'delete_record', {
-        state_id: parseInt(stateId)
+      const response = await fetch('/api/history_editor/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+        },
+        body: JSON.stringify({
+          state_id: parseInt(stateId)
+        })
       });
-      alert('Record deleted successfully');
-      this.loadRecords();
+
+      const result = await response.json();
+      
+      if (result.success) {
+        alert('Record deleted successfully');
+        this.loadRecords();
+      } else {
+        alert('Error deleting record: ' + (result.error || 'Unknown error'));
+      }
     } catch (error) {
       console.error('Error deleting record:', error);
       alert('Error deleting record: ' + error.message);

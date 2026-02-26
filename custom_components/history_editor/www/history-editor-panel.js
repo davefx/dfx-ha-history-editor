@@ -203,10 +203,14 @@ class HistoryEditorPanel extends HTMLElement {
     this.innerHTML = `
       <style>
         :host {
-          display: block;
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          box-sizing: border-box;
           padding: 16px;
           background: var(--primary-background-color);
           color: var(--primary-text-color);
+          overflow: hidden;
         }
         .header {
           display: flex;
@@ -286,8 +290,10 @@ class HistoryEditorPanel extends HTMLElement {
         .table-container {
           background: var(--card-background-color);
           border-radius: 8px;
-          overflow-x: auto;
+          overflow: auto;
           box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          flex: 1;
+          min-height: 0;
         }
         table {
           width: 100%;
@@ -329,7 +335,7 @@ class HistoryEditorPanel extends HTMLElement {
             width: 100%;
             box-sizing: border-box;
           }
-          #go-to-btn, #clear-date-btn, #add-btn {
+          #go-to-btn, #clear-date-btn, #add-btn, #scroll-top-btn, #scroll-bottom-btn {
             width: 100%;
           }
           table, thead, tbody, th, td, tr {
@@ -368,7 +374,7 @@ class HistoryEditorPanel extends HTMLElement {
             display: none;
           }
           .table-container {
-            overflow-x: unset;
+            overflow: auto;
           }
         }
         .empty-state {
@@ -566,13 +572,15 @@ class HistoryEditorPanel extends HTMLElement {
         <button id="go-to-btn" class="secondary">Go to Date</button>
         <button id="clear-date-btn" class="secondary">Clear Date</button>
         <button id="add-btn" class="secondary">Add New Record</button>
+        <button id="scroll-top-btn" class="secondary" title="Go to the first (most recent) records">⬆ Top</button>
+        <button id="scroll-bottom-btn" class="secondary" title="Go to the last (oldest) records">⬇ Bottom</button>
       </div>
 
       <div class="table-container">
         <div id="records-display"></div>
+        <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">⟳ Loading more records...</div>
+        <div id="scroll-sentinel" class="scroll-sentinel"></div>
       </div>
-      <div id="scroll-sentinel" class="scroll-sentinel"></div>
-      <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">⟳ Loading more records...</div>
 
       <div id="edit-modal" class="modal">
         <div class="modal-content">
@@ -677,6 +685,11 @@ class HistoryEditorPanel extends HTMLElement {
       e.preventDefault();
       this.saveRecord();
     });
+
+    const scrollTopBtn = this.querySelector('#scroll-top-btn');
+    const scrollBottomBtn = this.querySelector('#scroll-bottom-btn');
+    scrollTopBtn.addEventListener('click', () => this._scrollToTop());
+    scrollBottomBtn.addEventListener('click', () => this._scrollToBottom());
 
     // Handle data source changes
     const dataSourceSelect = this.querySelector('#data-source');
@@ -1407,13 +1420,14 @@ class HistoryEditorPanel extends HTMLElement {
     }
     const sentinel = this.querySelector('#scroll-sentinel');
     if (!sentinel) return;
+    const tableContainer = this.querySelector('.table-container');
     this._scrollObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
         if (entry.isIntersecting && this._hasMore && !this._loadingMore) {
           this._loadMoreRecords();
         }
       });
-    }, { rootMargin: '200px 0px' });
+    }, { root: tableContainer, rootMargin: '200px 0px' });
     this._scrollObserver.observe(sentinel);
   }
 
@@ -1424,13 +1438,14 @@ class HistoryEditorPanel extends HTMLElement {
     }
     const loadPrevRow = this.querySelector('#load-prev-row');
     if (!loadPrevRow || loadPrevRow.style.display === 'none') return;
+    const tableContainer = this.querySelector('.table-container');
     this._topObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
         if (entry.isIntersecting && this._domFirst > 0 && !this._loadingPrev) {
           this._loadPrevRecords();
         }
       });
-    }, { rootMargin: '100px 0px' });
+    }, { root: tableContainer, rootMargin: '100px 0px' });
     this._topObserver.observe(loadPrevRow);
   }
 
@@ -1656,6 +1671,7 @@ class HistoryEditorPanel extends HTMLElement {
           this._pruneBottomPage();
         }
         // Preserve scroll position while prepending (browsers may jump)
+        const tableContainer = this.querySelector('.table-container');
         const firstRow = this.querySelector(`#records-tbody [data-page="${this._domFirst}"]`);
         const anchorTop = firstRow ? firstRow.getBoundingClientRect().top : 0;
         this._prependToTable(prevRecords, prevPageIdx);
@@ -1664,7 +1680,7 @@ class HistoryEditorPanel extends HTMLElement {
         // Restore scroll position
         if (firstRow) {
           const newTop = firstRow.getBoundingClientRect().top;
-          window.scrollBy(0, newTop - anchorTop);
+          tableContainer.scrollBy(0, newTop - anchorTop);
         }
         // Hide load-prev row if we're back at the very first page
         if (this._domFirst === 0) {
@@ -1678,6 +1694,20 @@ class HistoryEditorPanel extends HTMLElement {
     } finally {
       this._loadingPrev = false;
     }
+  }
+
+  _scrollToTop() {
+    if (this._domFirst === 0) {
+      const tableContainer = this.querySelector('.table-container');
+      if (tableContainer) tableContainer.scrollTop = 0;
+    } else {
+      this.loadRecords();
+    }
+  }
+
+  _scrollToBottom() {
+    const tableContainer = this.querySelector('.table-container');
+    if (tableContainer) tableContainer.scrollTop = tableContainer.scrollHeight;
   }
 }
 

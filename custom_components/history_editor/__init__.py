@@ -20,11 +20,13 @@ _LOGGER = logging.getLogger(__name__)
 
 # Try to import statistics tables if available (newer HA versions)
 try:
-    from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+    from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta, StatisticsShortTerm
+    HAS_STATISTICS = True
     HAS_STATISTICS_SHORT_TERM = True
 except ImportError:
+    HAS_STATISTICS = False
     HAS_STATISTICS_SHORT_TERM = False
-    _LOGGER.debug("StatisticsShortTerm table not available in this HA version")
+    _LOGGER.debug("Statistics tables not available in this HA version")
 
 DOMAIN = "history_editor"
 
@@ -320,6 +322,194 @@ class CreateRecordView(HomeAssistantView):
             )
 
 
+class GetStatisticsView(HomeAssistantView):
+    """View to handle getting statistics records via REST API."""
+
+    url = "/api/history_editor/statistics"
+    name = "api:history_editor:statistics"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Get statistics records for an entity."""
+        try:
+            entity_id = request.query.get("entity_id")
+            if not entity_id:
+                return self.json(
+                    {"success": False, "error": "entity_id is required"},
+                    status_code=400
+                )
+
+            try:
+                limit = int(request.query.get("limit", 100))
+                if limit <= 0:
+                    return self.json(
+                        {"success": False, "error": "limit must be a positive integer"},
+                        status_code=400
+                    )
+            except (ValueError, TypeError):
+                return self.json(
+                    {"success": False, "error": "Invalid limit parameter"},
+                    status_code=400
+                )
+
+            statistic_type = request.query.get("statistic_type", "long_term")
+            if statistic_type not in ("long_term", "short_term"):
+                return self.json(
+                    {"success": False, "error": "statistic_type must be 'long_term' or 'short_term'"},
+                    status_code=400
+                )
+
+            start_time_str = request.query.get("start_time")
+            end_time_str = request.query.get("end_time")
+            start_time = None
+            end_time = None
+
+            if start_time_str:
+                try:
+                    start_time = dt_util.parse_datetime(start_time_str)
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid start_time format"},
+                        status_code=400
+                    )
+
+            if end_time_str:
+                try:
+                    end_time = dt_util.parse_datetime(end_time_str)
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid end_time format"},
+                        status_code=400
+                    )
+
+            result = await self.hass.async_add_executor_job(
+                _get_statistics_sync, self.hass, entity_id, start_time, end_time, limit, statistic_type
+            )
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in GetStatisticsView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
+class UpdateStatisticView(HomeAssistantView):
+    """View to handle updating statistics records via REST API."""
+
+    url = "/api/history_editor/statistics/update"
+    name = "api:history_editor:statistics:update"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Update a statistics record."""
+        try:
+            data = await request.json()
+
+            stat_id = data.get("id")
+            if not stat_id:
+                return self.json(
+                    {"success": False, "error": "id is required"},
+                    status_code=400
+                )
+
+            statistic_type = data.get("statistic_type", "long_term")
+            if statistic_type not in ("long_term", "short_term"):
+                return self.json(
+                    {"success": False, "error": "statistic_type must be 'long_term' or 'short_term'"},
+                    status_code=400
+                )
+
+            mean = data.get("mean")
+            min_val = data.get("min")
+            max_val = data.get("max")
+            sum_val = data.get("sum")
+            state = data.get("state")
+
+            start = None
+            if "start" in data and data["start"]:
+                try:
+                    start = dt_util.parse_datetime(data["start"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid start format"},
+                        status_code=400
+                    )
+
+            result = await self.hass.async_add_executor_job(
+                _update_statistic_sync,
+                self.hass,
+                int(stat_id),
+                mean,
+                min_val,
+                max_val,
+                sum_val,
+                state,
+                start,
+                statistic_type,
+            )
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in UpdateStatisticView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
+class DeleteStatisticView(HomeAssistantView):
+    """View to handle deleting statistics records via REST API."""
+
+    url = "/api/history_editor/statistics/delete"
+    name = "api:history_editor:statistics:delete"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the view."""
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Delete a statistics record."""
+        try:
+            data = await request.json()
+
+            stat_id = data.get("id")
+            if not stat_id:
+                return self.json(
+                    {"success": False, "error": "id is required"},
+                    status_code=400
+                )
+
+            statistic_type = data.get("statistic_type", "long_term")
+            if statistic_type not in ("long_term", "short_term"):
+                return self.json(
+                    {"success": False, "error": "statistic_type must be 'long_term' or 'short_term'"},
+                    status_code=400
+                )
+
+            result = await self.hass.async_add_executor_job(
+                _delete_statistic_sync, self.hass, int(stat_id), statistic_type
+            )
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in DeleteStatisticView: %s", err)
+            return self.json(
+                {"success": False, "error": str(err)},
+                status_code=500
+            )
+
+
 def _get_records_sync(
     hass: HomeAssistant,
     entity_id: str,
@@ -423,6 +613,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(UpdateRecordView(hass))
     hass.http.register_view(DeleteRecordView(hass))
     hass.http.register_view(CreateRecordView(hass))
+    hass.http.register_view(GetStatisticsView(hass))
+    hass.http.register_view(UpdateStatisticView(hass))
+    hass.http.register_view(DeleteStatisticView(hass))
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
@@ -670,4 +863,145 @@ def _create_record_sync(
             return {"success": True, "state_id": new_state.state_id}
     except Exception as err:
         _LOGGER.error("Error creating record: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def _get_statistics_sync(
+    hass: HomeAssistant,
+    entity_id: str,
+    start_time: datetime | None,
+    end_time: datetime | None,
+    limit: int,
+    statistic_type: str = "long_term",
+) -> dict[str, Any]:
+    """Get statistics records for an entity (synchronous)."""
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
+
+        with recorder.get_session() as session:
+            query = (
+                session.query(table)
+                .join(StatisticsMeta, table.metadata_id == StatisticsMeta.id)
+                .filter(StatisticsMeta.statistic_id == entity_id)
+            )
+
+            if start_time:
+                query = query.filter(table.start_ts >= start_time.timestamp())
+            if end_time:
+                query = query.filter(table.start_ts <= end_time.timestamp())
+
+            query = query.order_by(table.start_ts.desc()).limit(limit)
+            stats = query.all()
+
+            records = []
+            for stat in stats:
+                start_iso = None
+                if stat.start_ts is not None:
+                    start_iso = dt_util.utc_from_timestamp(stat.start_ts).isoformat()
+                last_reset_iso = None
+                if hasattr(stat, 'last_reset_ts') and stat.last_reset_ts is not None:
+                    last_reset_iso = dt_util.utc_from_timestamp(stat.last_reset_ts).isoformat()
+                records.append({
+                    "id": stat.id,
+                    "statistic_id": entity_id,
+                    "statistic_type": statistic_type,
+                    "start": start_iso,
+                    "mean": stat.mean,
+                    "min": stat.min,
+                    "max": stat.max,
+                    "sum": stat.sum,
+                    "state": stat.state,
+                    "last_reset": last_reset_iso,
+                })
+
+            _LOGGER.info("Retrieved %d statistics records for entity %s", len(records), entity_id)
+            return {"success": True, "records": records}
+    except Exception as err:
+        _LOGGER.error("Error retrieving statistics: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def _update_statistic_sync(
+    hass: HomeAssistant,
+    stat_id: int,
+    mean: float | None,
+    min_val: float | None,
+    max_val: float | None,
+    sum_val: float | None,
+    state: float | None,
+    start: datetime | None,
+    statistic_type: str = "long_term",
+) -> dict[str, Any]:
+    """Update a statistics record (synchronous)."""
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
+
+        with recorder.get_session() as session:
+            stat = session.query(table).filter(table.id == stat_id).first()
+
+            if stat is None:
+                return {"success": False, "error": f"Statistic ID {stat_id} not found"}
+
+            if mean is not None:
+                stat.mean = float(mean)
+            if min_val is not None:
+                stat.min = float(min_val)
+            if max_val is not None:
+                stat.max = float(max_val)
+            if sum_val is not None:
+                stat.sum = float(sum_val)
+            if state is not None:
+                stat.state = float(state)
+            if start is not None:
+                stat.start_ts = start.timestamp()
+
+            session.commit()
+            _LOGGER.info("Updated statistic record %s", stat_id)
+            return {"success": True, "id": stat_id}
+    except Exception as err:
+        _LOGGER.error("Error updating statistic: %s", err)
+        return {"success": False, "error": str(err)}
+
+
+def _delete_statistic_sync(
+    hass: HomeAssistant,
+    stat_id: int,
+    statistic_type: str = "long_term",
+) -> dict[str, Any]:
+    """Delete a statistics record (synchronous)."""
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
+
+        with recorder.get_session() as session:
+            deleted_count = session.query(table).filter(table.id == stat_id).delete(synchronize_session=False)
+            session.commit()
+
+            if deleted_count > 0:
+                _LOGGER.info("Deleted statistic record %s", stat_id)
+                return {"success": True, "id": stat_id}
+            else:
+                return {"success": False, "error": f"Statistic ID {stat_id} not found"}
+    except Exception as err:
+        _LOGGER.error("Error deleting statistic: %s", err)
         return {"success": False, "error": str(err)}

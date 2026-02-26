@@ -9,6 +9,7 @@ A custom Home Assistant component that provides a powerful interface for editing
 - ✏️ **Edit Records**: Update state values, attributes, and timestamps
 - ➕ **Create Records**: Add new historical data points
 - 🗑️ **Delete Records**: Remove unwanted history entries
+- 📈 **Statistics Editing**: View, edit, and delete long-term and short-term statistics records
 - 🎨 **Modern UI**: Clean, responsive interface integrated into Home Assistant
 - 🔐 **Admin Only**: Requires administrator privileges for safety
 
@@ -47,12 +48,16 @@ Then restart Home Assistant.
 
 After installation and configuration, you'll find a new "History Editor" menu item in your Home Assistant sidebar.
 
-1. **Select an Entity**: Choose the entity whose history you want to view/edit. Records will automatically load.
-2. **Set Record Limit**: Specify how many records to load (default: 100, max: 1000)
-3. **Go to Date/Time** (Optional): Select a specific date and time to view records up to that point, then click "Go to Date". Use "Clear Date" to return to viewing the most recent records.
-4. **Edit**: Click the "Edit" button on any record to modify its values
-5. **Delete**: Click the "Delete" button to remove a record
-6. **Add New**: Click "Add New Record" to create a new historical entry
+1. **Select Data Source**: Choose between:
+   - **State History**: Recent state records (default HA retention: up to 10 days)
+   - **Statistics (Long-term, hourly)**: Hourly aggregated statistics kept indefinitely
+   - **Statistics (Short-term, 5 min)**: 5-minute aggregated statistics
+2. **Select an Entity**: Choose the entity whose history you want to view/edit. Records will automatically load.
+3. **Set Record Limit**: Specify how many records to load (default: 100, max: 1000)
+4. **Go to Date/Time** (Optional): Select a specific date and time to view records up to that point, then click "Go to Date". Use "Clear Date" to return to viewing the most recent records.
+5. **Edit**: Click the "Edit" button on any record to modify its values
+6. **Delete**: Click the "Delete" button to remove a record
+7. **Add New**: Click "Add New Record" to create a new historical entry (State History only)
 
 ### Services
 
@@ -145,6 +150,7 @@ data:
 - **Testing**: Create sample historical data for testing dashboards and automations
 - **Cleanup**: Remove erroneous or duplicate entries from your database
 - **Migration**: Import historical data from other systems
+- **Statistics Repair**: Correct or remove wrong statistics data that persists beyond the normal history retention period
 
 ## Important Notes
 

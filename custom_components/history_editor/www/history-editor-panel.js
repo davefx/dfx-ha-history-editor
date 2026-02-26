@@ -15,6 +15,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._entityFormInitialized = false; // Track if ha-form is set up
     this._statusElements = {}; // Cache for status elements
     this.goToDate = null; // Date to load records from
+    this.dataSource = 'states'; // 'states', 'statistics', 'statistics_short_term'
   }
 
   _debugLog(...args) {
@@ -450,6 +451,14 @@ class HistoryEditorPanel extends HTMLElement {
       </div>` : ''}
 
       <div class="controls">
+        <div class="control-group">
+          <label for="data-source">Data Source</label>
+          <select id="data-source">
+            <option value="states">State History</option>
+            <option value="statistics">Statistics (Long-term, hourly)</option>
+            <option value="statistics_short_term">Statistics (Short-term, 5 min)</option>
+          </select>
+        </div>
         <div class="control-group entity-form-container">
           <ha-form id="entity-form"></ha-form>
         </div>
@@ -478,24 +487,52 @@ class HistoryEditorPanel extends HTMLElement {
           </div>
           <form id="edit-form">
             <div class="form-field">
-              <label>State ID</label>
+              <label id="id-field-label">State ID</label>
               <input type="text" id="edit-state-id" readonly>
             </div>
-            <div class="form-field">
-              <label>Entity ID</label>
-              <input type="text" id="edit-entity-id">
+            <div id="states-form-fields">
+              <div class="form-field">
+                <label>Entity ID</label>
+                <input type="text" id="edit-entity-id">
+              </div>
+              <div class="form-field">
+                <label>State</label>
+                <input type="text" id="edit-state">
+              </div>
+              <div class="form-field">
+                <label>Attributes (JSON)</label>
+                <textarea id="edit-attributes"></textarea>
+              </div>
+              <div class="form-field">
+                <label>Timestamp</label>
+                <input type="datetime-local" id="edit-last-updated">
+              </div>
             </div>
-            <div class="form-field">
-              <label>State</label>
-              <input type="text" id="edit-state" required>
-            </div>
-            <div class="form-field">
-              <label>Attributes (JSON)</label>
-              <textarea id="edit-attributes"></textarea>
-            </div>
-            <div class="form-field">
-              <label>Timestamp</label>
-              <input type="datetime-local" id="edit-last-updated">
+            <div id="stats-form-fields" style="display:none">
+              <div class="form-field">
+                <label>Start Time</label>
+                <input type="datetime-local" id="edit-stat-start">
+              </div>
+              <div class="form-field">
+                <label>Mean</label>
+                <input type="number" step="any" id="edit-stat-mean" placeholder="null">
+              </div>
+              <div class="form-field">
+                <label>Min</label>
+                <input type="number" step="any" id="edit-stat-min" placeholder="null">
+              </div>
+              <div class="form-field">
+                <label>Max</label>
+                <input type="number" step="any" id="edit-stat-max" placeholder="null">
+              </div>
+              <div class="form-field">
+                <label>Sum</label>
+                <input type="number" step="any" id="edit-stat-sum" placeholder="null">
+              </div>
+              <div class="form-field">
+                <label>State (last)</label>
+                <input type="number" step="any" id="edit-stat-state-val" placeholder="null">
+              </div>
             </div>
             <div class="modal-actions">
               <button type="button" id="modal-cancel" class="secondary">Cancel</button>
@@ -544,6 +581,18 @@ class HistoryEditorPanel extends HTMLElement {
     editForm.addEventListener('submit', (e) => {
       e.preventDefault();
       this.saveRecord();
+    });
+
+    // Handle data source changes
+    const dataSourceSelect = this.querySelector('#data-source');
+    dataSourceSelect.value = this.dataSource;
+    dataSourceSelect.addEventListener('change', (e) => {
+      this.dataSource = e.target.value;
+      // Hide "Add New Record" button for statistics (stats are computed, not manually created)
+      addBtn.style.display = this.dataSource === 'states' ? '' : 'none';
+      if (this.selectedEntity) {
+        this.loadRecords();
+      }
     });
     
     // Set up event delegation for Edit and Delete buttons in the records table
@@ -609,6 +658,11 @@ class HistoryEditorPanel extends HTMLElement {
     }
 
     const limit = parseInt(limitInput.value) || 100;
+
+    // Branch based on data source
+    if (this.dataSource !== 'states') {
+      return this.loadStatistics(entityId, limit);
+    }
 
     try {
       // Build query parameters
@@ -754,19 +808,50 @@ class HistoryEditorPanel extends HTMLElement {
     this.querySelector('#edit-state-id').value = 'NEW';
     this.querySelector('#edit-entity-id').value = this.selectedEntity || '';
     this.querySelector('#edit-entity-id').readOnly = false;
+
+    // Ensure states fields are shown for add mode
+    this.querySelector('#id-field-label').textContent = 'State ID';
+    this.querySelector('#states-form-fields').style.display = 'block';
+    this.querySelector('#stats-form-fields').style.display = 'none';
     
     modal.classList.add('show');
   }
 
   editRecord(stateId) {
-    const record = this.records.find(r => r.state_id === stateId);
+    const record = this.records.find(r => (r.state_id ?? r.id) === stateId);
     if (!record) return;
 
     const modal = this.querySelector('#edit-modal');
     const title = this.querySelector('#modal-title');
 
+    if (this.dataSource !== 'states') {
+      // Statistics mode
+      title.textContent = 'Edit Statistic';
+      this.querySelector('#id-field-label').textContent = 'Statistic ID';
+      this.querySelector('#edit-state-id').value = record.id;
+
+      this.querySelector('#states-form-fields').style.display = 'none';
+      this.querySelector('#stats-form-fields').style.display = 'block';
+
+      if (record.start) {
+        this.querySelector('#edit-stat-start').value = this.formatDatetimeLocal(record.start);
+      }
+      this._setStatField('#edit-stat-mean', record.mean);
+      this._setStatField('#edit-stat-min', record.min);
+      this._setStatField('#edit-stat-max', record.max);
+      this._setStatField('#edit-stat-sum', record.sum);
+      this._setStatField('#edit-stat-state-val', record.state);
+
+      modal.classList.add('show');
+      return;
+    }
+
+    // States mode
     title.textContent = 'Edit Record';
-    
+    this.querySelector('#id-field-label').textContent = 'State ID';
+    this.querySelector('#states-form-fields').style.display = 'block';
+    this.querySelector('#stats-form-fields').style.display = 'none';
+
     this.querySelector('#edit-state-id').value = record.state_id;
     this.querySelector('#edit-entity-id').value = record.entity_id;
     this.querySelector('#edit-entity-id').readOnly = true;
@@ -778,6 +863,13 @@ class HistoryEditorPanel extends HTMLElement {
     }
 
     modal.classList.add('show');
+  }
+
+  _setStatField(selector, value) {
+    const field = this.querySelector(selector);
+    if (field) {
+      field.value = value !== null && value !== undefined ? value : '';
+    }
   }
 
   formatDatetimeLocal(isoString) {
@@ -818,6 +910,13 @@ class HistoryEditorPanel extends HTMLElement {
 
   async saveRecord() {
     const stateId = this.querySelector('#edit-state-id').value;
+
+    // Handle statistics mode
+    if (this.dataSource !== 'states') {
+      await this._saveStatistic(parseInt(stateId));
+      return;
+    }
+
     const entityId = this.querySelector('#edit-entity-id').value;
     const state = this.querySelector('#edit-state').value;
     const attributesText = this.querySelector('#edit-attributes').value;
@@ -910,6 +1009,12 @@ class HistoryEditorPanel extends HTMLElement {
       return;
     }
 
+    // Handle statistics mode
+    if (this.dataSource !== 'states') {
+      await this._deleteStatistic(stateId);
+      return;
+    }
+
     try {
       const response = await fetch('/api/history_editor/delete', {
         method: 'POST',
@@ -933,6 +1038,182 @@ class HistoryEditorPanel extends HTMLElement {
     } catch (error) {
       console.error('Error deleting record:', error);
       alert('Error deleting record: ' + error.message);
+    }
+  }
+
+  async loadStatistics(entityId, limit) {
+    try {
+      const statisticType = this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term';
+      const params = new URLSearchParams({
+        entity_id: entityId,
+        limit: limit.toString(),
+        statistic_type: statisticType,
+      });
+
+      if (this.goToDate) {
+        const localDate = new Date(this.goToDate);
+        params.append('end_time', localDate.toISOString());
+      }
+
+      const url = `/api/history_editor/statistics?${params.toString()}`;
+      this._debugLog('[HistoryEditor] Calling statistics API:', url);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      const result = await response.json();
+      this._debugLog('[HistoryEditor] Statistics API response:', result);
+
+      if (result && result.success) {
+        this.records = result.records || [];
+        this.displayStatistics(this.records);
+      } else {
+        const errorMsg = result?.error || 'Unknown error occurred';
+        alert('Error loading statistics: ' + errorMsg);
+        this.showMessage('Failed to load statistics: ' + errorMsg);
+      }
+    } catch (error) {
+      console.error('Error loading statistics:', error);
+      alert('Error loading statistics: ' + error.message);
+      this.showMessage('Error loading statistics. Please check the console for details.');
+    }
+  }
+
+  displayStatistics(records) {
+    const display = this.querySelector('#records-display');
+
+    if (!records || records.length === 0) {
+      display.innerHTML = `
+        <div class="empty-state">
+          <div style="font-size: 48px; opacity: 0.3;">📊</div>
+          <p>No statistics records found</p>
+        </div>
+      `;
+      return;
+    }
+
+    const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
+
+    let html = `
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Start Time</th>
+            <th>Mean</th>
+            <th>Min</th>
+            <th>Max</th>
+            <th>Sum</th>
+            <th>State</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    records.forEach(record => {
+      html += `
+        <tr>
+          <td data-label="ID">${record.id}</td>
+          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
+          <td data-label="Mean">${fmtNum(record.mean)}</td>
+          <td data-label="Min">${fmtNum(record.min)}</td>
+          <td data-label="Max">${fmtNum(record.max)}</td>
+          <td data-label="Sum">${fmtNum(record.sum)}</td>
+          <td data-label="State">${fmtNum(record.state)}</td>
+          <td class="actions">
+            <button class="secondary edit-btn" data-state-id="${record.id}">Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.id}">Delete</button>
+          </td>
+        </tr>
+      `;
+    });
+
+    html += '</tbody></table>';
+    display.innerHTML = html;
+  }
+
+  async _saveStatistic(statId) {
+    const statStart = this.querySelector('#edit-stat-start').value;
+    const meanVal = this.querySelector('#edit-stat-mean').value;
+    const minVal = this.querySelector('#edit-stat-min').value;
+    const maxVal = this.querySelector('#edit-stat-max').value;
+    const sumVal = this.querySelector('#edit-stat-sum').value;
+    const stateVal = this.querySelector('#edit-stat-state-val').value;
+
+    const data = {
+      id: statId,
+      statistic_type: this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term',
+    };
+
+    if (meanVal !== '') { const n = parseFloat(meanVal); if (!isNaN(n)) data.mean = n; }
+    if (minVal !== '') { const n = parseFloat(minVal); if (!isNaN(n)) data.min = n; }
+    if (maxVal !== '') { const n = parseFloat(maxVal); if (!isNaN(n)) data.max = n; }
+    if (sumVal !== '') { const n = parseFloat(sumVal); if (!isNaN(n)) data.sum = n; }
+    if (stateVal !== '') { const n = parseFloat(stateVal); if (!isNaN(n)) data.state = n; }
+    if (statStart) {
+      data.start = new Date(statStart).toISOString();
+    }
+
+    try {
+      const response = await fetch('/api/history_editor/statistics/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+        },
+        body: JSON.stringify(data)
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert('Statistic updated successfully');
+        this.hideModal();
+        this.loadRecords();
+      } else {
+        alert('Error updating statistic: ' + (result.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error saving statistic:', error);
+      alert('Error saving statistic: ' + error.message);
+    }
+  }
+
+  async _deleteStatistic(statId) {
+    try {
+      const response = await fetch('/api/history_editor/statistics/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`
+        },
+        body: JSON.stringify({
+          id: parseInt(statId),
+          statistic_type: this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term',
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert('Statistic deleted successfully');
+        this.loadRecords();
+      } else {
+        alert('Error deleting statistic: ' + (result.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error deleting statistic:', error);
+      alert('Error deleting statistic: ' + error.message);
     }
   }
 }

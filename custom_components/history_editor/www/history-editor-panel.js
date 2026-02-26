@@ -16,6 +16,16 @@ class HistoryEditorPanel extends HTMLElement {
     this._statusElements = {}; // Cache for status elements
     this.goToDate = null; // Date to load records from
     this.dataSource = 'states'; // 'states', 'statistics', 'statistics_short_term'
+    // Infinite scroll pagination state
+    this._pageCursors = [];       // end_time cursor used to load each page
+    this._domFirst = 0;           // First page index currently in DOM
+    this._domLast = -1;           // Last page index currently in DOM
+    this._hasMore = false;        // Whether more records exist below current view
+    this._loadingMore = false;    // Lock to prevent concurrent page loads
+    this._loadingPrev = false;    // Lock to prevent concurrent prev-page loads
+    this._pageSize = 100;         // Current page size
+    this._scrollObserver = null;  // IntersectionObserver for scroll sentinel
+    this._topObserver = null;     // IntersectionObserver for load-prev row
   }
 
   _debugLog(...args) {
@@ -60,6 +70,14 @@ class HistoryEditorPanel extends HTMLElement {
     this._initialized = false;
     this._entityFormInitialized = false;
     this._statusElements = {};
+    if (this._scrollObserver) {
+      this._scrollObserver.disconnect();
+      this._scrollObserver = null;
+    }
+    if (this._topObserver) {
+      this._topObserver.disconnect();
+      this._topObserver = null;
+    }
   }
 
   set hass(hass) {
@@ -455,6 +473,25 @@ class HistoryEditorPanel extends HTMLElement {
         .debug-status .status-warning {
           color: var(--warning-color, orange);
         }
+        .scroll-sentinel {
+          height: 1px;
+        }
+        .loading-more-indicator {
+          text-align: center;
+          padding: 12px 16px;
+          color: var(--secondary-text-color);
+          font-size: 13px;
+        }
+        .load-prev-cell {
+          text-align: center;
+          padding: 12px !important;
+          color: var(--primary-color);
+          cursor: pointer;
+          font-size: 13px;
+        }
+        .load-prev-cell:hover {
+          text-decoration: underline;
+        }
       </style>
 
       <div class="header">
@@ -516,6 +553,8 @@ class HistoryEditorPanel extends HTMLElement {
       <div class="table-container">
         <div id="records-display"></div>
       </div>
+      <div id="scroll-sentinel" class="scroll-sentinel"></div>
+      <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">⟳ Loading more records...</div>
 
       <div id="edit-modal" class="modal">
         <div class="modal-content">
@@ -648,6 +687,11 @@ class HistoryEditorPanel extends HTMLElement {
         const stateId = parseInt(target.dataset.stateId);
         this.deleteRecord(stateId);
       }
+
+      // Handle Load Previous click
+      if (target.classList.contains('load-prev-cell')) {
+        this._loadPrevRecords();
+      }
     });
     
     // Set up ha-form if hass is available
@@ -748,9 +792,29 @@ class HistoryEditorPanel extends HTMLElement {
 
       // Check if the API call was successful
       if (result && result.success) {
-        this.records = result.records || [];
-        this._debugLog('[HistoryEditor] Loaded', this.records.length, 'records');
-        this.displayRecords(this.records);
+        const records = result.records || [];
+        this._hasMore = result.has_more || false;
+        this._pageSize = limit;
+        this._loadingMore = false;
+        this._loadingPrev = false;
+        this._domFirst = 0;
+        this._domLast = 0;
+        // Store cursor for page 0 so it can be reloaded if pruned from DOM
+        // Always add +1ms so that re-fetching with end_time=cursor returns the same records
+        const p0Cursor = this.goToDate
+          ? new Date(new Date(this.goToDate).getTime() + 1).toISOString()
+          : (records.length > 0
+            ? new Date(new Date(records[0].last_updated).getTime() + 1).toISOString()
+            : new Date().toISOString());
+        this._pageCursors = [p0Cursor];
+        // Pre-compute cursor for next page (page 1)
+        if (records.length > 0) {
+          const oldest = records[records.length - 1];
+          this._pageCursors.push(new Date(new Date(oldest.last_updated).getTime() - 1).toISOString());
+        }
+        this.records = records;
+        this._debugLog('[HistoryEditor] Loaded', records.length, 'records, has_more:', this._hasMore);
+        this.displayRecords(records);
       } else {
         const errorMsg = result?.error || 'Unknown error occurred';
         this._debugLog('[HistoryEditor] API returned error:', errorMsg);
@@ -802,7 +866,10 @@ class HistoryEditorPanel extends HTMLElement {
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="records-tbody">
+          <tr id="load-prev-row" style="display:none">
+            <td colspan="5" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+          </tr>
     `;
 
     records.forEach(record => {
@@ -812,7 +879,7 @@ class HistoryEditorPanel extends HTMLElement {
         : attributes;
 
       html += `
-        <tr>
+        <tr data-page="0">
           <td data-label="ID">${record.state_id}</td>
           <td data-label="State">${this.escapeHtml(record.state)}</td>
           <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
@@ -827,6 +894,7 @@ class HistoryEditorPanel extends HTMLElement {
 
     html += '</tbody></table>';
     display.innerHTML = html;
+    this._setupScrollObserver();
   }
 
   escapeHtml(text) {
@@ -1112,8 +1180,28 @@ class HistoryEditorPanel extends HTMLElement {
       this._debugLog('[HistoryEditor] Statistics API response:', result);
 
       if (result && result.success) {
-        this.records = result.records || [];
-        this.displayStatistics(this.records);
+        const records = result.records || [];
+        this._hasMore = result.has_more || false;
+        this._pageSize = limit;
+        this._loadingMore = false;
+        this._loadingPrev = false;
+        this._domFirst = 0;
+        this._domLast = 0;
+        // Store cursor for page 0 so it can be reloaded if pruned from DOM
+        // Always add +1ms so that re-fetching with end_time=cursor returns the same records
+        const p0Cursor = this.goToDate
+          ? new Date(new Date(this.goToDate).getTime() + 1).toISOString()
+          : (records.length > 0
+            ? new Date(new Date(records[0].start).getTime() + 1).toISOString()
+            : new Date().toISOString());
+        this._pageCursors = [p0Cursor];
+        // Pre-compute cursor for next page (page 1)
+        if (records.length > 0) {
+          const oldest = records[records.length - 1];
+          this._pageCursors.push(new Date(new Date(oldest.start).getTime() - 1).toISOString());
+        }
+        this.records = records;
+        this.displayStatistics(records);
       } else {
         const errorMsg = result?.error || 'Unknown error occurred';
         alert('Error loading statistics: ' + errorMsg);
@@ -1155,7 +1243,10 @@ class HistoryEditorPanel extends HTMLElement {
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="records-tbody">
+          <tr id="load-prev-row" style="display:none">
+            <td colspan="8" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+          </tr>
     `;
 
     records.forEach(record => {
@@ -1170,7 +1261,7 @@ class HistoryEditorPanel extends HTMLElement {
       const lockIcon = locked ? ' 🔒' : '';
 
       html += `
-        <tr>
+        <tr data-page="0">
           <td data-label="ID">${record.id}${lockIcon}</td>
           <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
           <td data-label="Mean">${fmtNum(record.mean)}</td>
@@ -1188,6 +1279,7 @@ class HistoryEditorPanel extends HTMLElement {
 
     html += '</tbody></table>';
     display.innerHTML = html;
+    this._setupScrollObserver();
   }
 
   async _saveStatistic(statId) {
@@ -1262,6 +1354,298 @@ class HistoryEditorPanel extends HTMLElement {
     } catch (error) {
       console.error('Error deleting statistic:', error);
       alert('Error deleting statistic: ' + error.message);
+    }
+  }
+
+  // ─── Infinite scroll helpers ──────────────────────────────────────────────
+
+  _getRecordTimestamp(record) {
+    // Returns the ISO timestamp string for the record (works for both states and statistics)
+    return this.dataSource !== 'states' ? record.start : record.last_updated;
+  }
+
+  _setupScrollObserver() {
+    if (this._scrollObserver) {
+      this._scrollObserver.disconnect();
+      this._scrollObserver = null;
+    }
+    const indicator = this.querySelector('#loading-more-indicator');
+    if (!this._hasMore) {
+      if (indicator) indicator.style.display = 'none';
+      return;
+    }
+    const sentinel = this.querySelector('#scroll-sentinel');
+    if (!sentinel) return;
+    this._scrollObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && this._hasMore && !this._loadingMore) {
+          this._loadMoreRecords();
+        }
+      });
+    }, { rootMargin: '200px 0px' });
+    this._scrollObserver.observe(sentinel);
+  }
+
+  _setupTopObserver() {
+    if (this._topObserver) {
+      this._topObserver.disconnect();
+      this._topObserver = null;
+    }
+    const loadPrevRow = this.querySelector('#load-prev-row');
+    if (!loadPrevRow || loadPrevRow.style.display === 'none') return;
+    this._topObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && this._domFirst > 0 && !this._loadingPrev) {
+          this._loadPrevRecords();
+        }
+      });
+    }, { rootMargin: '100px 0px' });
+    this._topObserver.observe(loadPrevRow);
+  }
+
+  _appendToTable(records, pageIdx) {
+    const tbody = this.querySelector('#records-tbody');
+    if (!tbody) return;
+    if (this.dataSource !== 'states') {
+      const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
+      records.forEach(record => {
+        const locked = record.has_source_data === true;
+        const lockTitle = locked
+          ? (this.dataSource === 'statistics_short_term'
+            ? 'State history exists for this period — edit state history instead'
+            : 'Short-term statistics exist for this period — edit short-term statistics instead')
+          : '';
+        const lockIcon = locked ? ' 🔒' : '';
+        const tr = document.createElement('tr');
+        tr.dataset.page = pageIdx;
+        tr.innerHTML = `
+          <td data-label="ID">${record.id}${lockIcon}</td>
+          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
+          <td data-label="Mean">${fmtNum(record.mean)}</td>
+          <td data-label="Min">${fmtNum(record.min)}</td>
+          <td data-label="Max">${fmtNum(record.max)}</td>
+          <td data-label="Sum">${fmtNum(record.sum)}</td>
+          <td data-label="State">${fmtNum(record.state)}</td>
+          <td class="actions">
+            <button class="secondary edit-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Delete</button>
+          </td>`;
+        tbody.appendChild(tr);
+      });
+    } else {
+      records.forEach(record => {
+        const attributes = JSON.stringify(record.attributes || {});
+        const attributesPreview = attributes.length > 50
+          ? attributes.substring(0, 50) + '...'
+          : attributes;
+        const tr = document.createElement('tr');
+        tr.dataset.page = pageIdx;
+        tr.innerHTML = `
+          <td data-label="ID">${record.state_id}</td>
+          <td data-label="State">${this.escapeHtml(record.state)}</td>
+          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
+          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
+          <td class="actions">
+            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
+          </td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+
+  _prependToTable(records, pageIdx) {
+    const tbody = this.querySelector('#records-tbody');
+    if (!tbody) return;
+    // Insert after the load-prev-row (or at the top if it doesn't exist)
+    const loadPrevRow = tbody.querySelector('#load-prev-row');
+    const insertBefore = loadPrevRow ? loadPrevRow.nextSibling : tbody.firstChild;
+    const fragment = document.createDocumentFragment();
+    if (this.dataSource !== 'states') {
+      const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
+      records.forEach(record => {
+        const locked = record.has_source_data === true;
+        const lockTitle = locked
+          ? (this.dataSource === 'statistics_short_term'
+            ? 'State history exists for this period — edit state history instead'
+            : 'Short-term statistics exist for this period — edit short-term statistics instead')
+          : '';
+        const lockIcon = locked ? ' 🔒' : '';
+        const tr = document.createElement('tr');
+        tr.dataset.page = pageIdx;
+        tr.innerHTML = `
+          <td data-label="ID">${record.id}${lockIcon}</td>
+          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
+          <td data-label="Mean">${fmtNum(record.mean)}</td>
+          <td data-label="Min">${fmtNum(record.min)}</td>
+          <td data-label="Max">${fmtNum(record.max)}</td>
+          <td data-label="Sum">${fmtNum(record.sum)}</td>
+          <td data-label="State">${fmtNum(record.state)}</td>
+          <td class="actions">
+            <button class="secondary edit-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Delete</button>
+          </td>`;
+        fragment.appendChild(tr);
+      });
+    } else {
+      records.forEach(record => {
+        const attributes = JSON.stringify(record.attributes || {});
+        const attributesPreview = attributes.length > 50
+          ? attributes.substring(0, 50) + '...'
+          : attributes;
+        const tr = document.createElement('tr');
+        tr.dataset.page = pageIdx;
+        tr.innerHTML = `
+          <td data-label="ID">${record.state_id}</td>
+          <td data-label="State">${this.escapeHtml(record.state)}</td>
+          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
+          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
+          <td class="actions">
+            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
+          </td>`;
+        fragment.appendChild(tr);
+      });
+    }
+    tbody.insertBefore(fragment, insertBefore);
+  }
+
+  _pruneTopPage() {
+    const tbody = this.querySelector('#records-tbody');
+    if (!tbody) return;
+    const pageToRemove = this._domFirst;
+    const rows = Array.from(tbody.querySelectorAll(`[data-page="${pageToRemove}"]`));
+    // Remove from records array (front)
+    this.records = this.records.slice(rows.length);
+    rows.forEach(row => row.remove());
+    this._domFirst++;
+    // Show the load-prev row and set up top observer
+    const loadPrevRow = tbody.querySelector('#load-prev-row');
+    if (loadPrevRow) {
+      loadPrevRow.style.display = '';
+      this._setupTopObserver();
+    }
+  }
+
+  _pruneBottomPage() {
+    const tbody = this.querySelector('#records-tbody');
+    if (!tbody) return;
+    const pageToRemove = this._domLast;
+    const rows = Array.from(tbody.querySelectorAll(`[data-page="${pageToRemove}"]`));
+    // Remove from records array (back)
+    this.records = this.records.slice(0, this.records.length - rows.length);
+    rows.forEach(row => row.remove());
+    this._domLast--;
+    // More pages are known to exist (the removed page's cursor is still in _pageCursors)
+    this._hasMore = true;
+    this._setupScrollObserver();
+  }
+
+  async _loadMoreRecords() {
+    if (this._loadingMore || !this._hasMore || !this.selectedEntity) return;
+    this._loadingMore = true;
+    const indicator = this.querySelector('#loading-more-indicator');
+    if (indicator) indicator.style.display = 'block';
+    try {
+      const pageIdx = this._domLast + 1;
+      // Use pre-stored cursor when available, otherwise can't proceed
+      const cursorEndTime = this._pageCursors.length > pageIdx ? this._pageCursors[pageIdx] : null;
+      if (!cursorEndTime) {
+        this._hasMore = false;
+        if (this._scrollObserver) { this._scrollObserver.disconnect(); this._scrollObserver = null; }
+        return;
+      }
+      const limit = this._pageSize;
+      const params = new URLSearchParams({ entity_id: this.selectedEntity, limit: limit.toString(), end_time: cursorEndTime });
+      let url;
+      if (this.dataSource !== 'states') {
+        params.append('statistic_type', this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term');
+        url = `/api/history_editor/statistics?${params.toString()}`;
+      } else {
+        url = `/api/history_editor/records?${params.toString()}`;
+      }
+      const response = await fetch(url, { headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result && result.success && result.records && result.records.length > 0) {
+        const newRecords = result.records;
+        this._domLast = pageIdx;
+        // Pre-compute cursor for the next page and store it
+        if (result.has_more && this._pageCursors.length <= this._domLast + 1) {
+          const oldest = newRecords[newRecords.length - 1];
+          const oldestTs = new Date(this._getRecordTimestamp(oldest)).getTime();
+          this._pageCursors.push(new Date(oldestTs - 1).toISOString());
+        }
+        this._hasMore = result.has_more || false;
+        // Append rows and accumulate records
+        this._appendToTable(newRecords, pageIdx);
+        this.records = this.records.concat(newRecords);
+        // Prune top page if the DOM window exceeds 3 pages
+        if (this._domLast - this._domFirst + 1 > 3) {
+          this._pruneTopPage();
+        }
+        this._setupScrollObserver();
+      } else {
+        this._hasMore = false;
+        if (this._scrollObserver) { this._scrollObserver.disconnect(); this._scrollObserver = null; }
+        if (indicator) indicator.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('[HistoryEditor] Error loading more records:', error);
+    } finally {
+      this._loadingMore = false;
+      const ind = this.querySelector('#loading-more-indicator');
+      if (ind) ind.style.display = 'none';
+    }
+  }
+
+  async _loadPrevRecords() {
+    if (this._loadingPrev || this._domFirst === 0) return;
+    this._loadingPrev = true;
+    try {
+      const prevPageIdx = this._domFirst - 1;
+      const cursorEndTime = this._pageCursors[prevPageIdx];
+      const limit = this._pageSize;
+      const params = new URLSearchParams({ entity_id: this.selectedEntity, limit: limit.toString() });
+      if (cursorEndTime) params.append('end_time', cursorEndTime);
+      let url;
+      if (this.dataSource !== 'states') {
+        params.append('statistic_type', this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term');
+        url = `/api/history_editor/statistics?${params.toString()}`;
+      } else {
+        url = `/api/history_editor/records?${params.toString()}`;
+      }
+      const response = await fetch(url, { headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result && result.success && result.records && result.records.length > 0) {
+        const prevRecords = result.records;
+        // Prune bottom page if adding this page would exceed 3 pages in DOM
+        if (this._domLast - prevPageIdx + 1 > 3) {
+          this._pruneBottomPage();
+        }
+        // Preserve scroll position while prepending (browsers may jump)
+        const firstRow = this.querySelector(`#records-tbody [data-page="${this._domFirst}"]`);
+        const anchorTop = firstRow ? firstRow.getBoundingClientRect().top : 0;
+        this._prependToTable(prevRecords, prevPageIdx);
+        this.records = prevRecords.concat(this.records);
+        this._domFirst = prevPageIdx;
+        // Restore scroll position
+        if (firstRow) {
+          const newTop = firstRow.getBoundingClientRect().top;
+          window.scrollBy(0, newTop - anchorTop);
+        }
+        // Hide load-prev row if we're back at the very first page
+        if (this._domFirst === 0) {
+          const loadPrevRow = this.querySelector('#load-prev-row');
+          if (loadPrevRow) loadPrevRow.style.display = 'none';
+          if (this._topObserver) { this._topObserver.disconnect(); this._topObserver = null; }
+        }
+      }
+    } catch (error) {
+      console.error('[HistoryEditor] Error loading previous records:', error);
+    } finally {
+      this._loadingPrev = false;
     }
   }
 }

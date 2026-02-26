@@ -552,15 +552,20 @@ def _get_records_sync(
                     query = query.filter(States.last_updated <= end_time)
             
             # Order by timestamp field (newer schema) with fallback to legacy field
+            # Fetch one extra record to determine whether more records exist
+            fetch_limit = limit + 1
             if hasattr(States, 'last_updated_ts'):
-                query = query.order_by(States.last_updated_ts.desc()).limit(limit)
+                query = query.order_by(States.last_updated_ts.desc()).limit(fetch_limit)
             else:
                 # Fallback to legacy datetime field
-                query = query.order_by(States.last_updated.desc()).limit(limit)
+                query = query.order_by(States.last_updated.desc()).limit(fetch_limit)
             
             _LOGGER.info("Executing query: %s", str(query))
             states = query.all()
-            _LOGGER.info("Query returned %d states", len(states))
+            has_more = len(states) > limit
+            if has_more:
+                states = states[:limit]
+            _LOGGER.info("Query returned %d states (has_more=%s)", len(states), has_more)
 
             records = []
             for state in states:
@@ -598,7 +603,7 @@ def _get_records_sync(
                 })
 
             _LOGGER.info("Retrieved %d records for entity %s", len(records), entity_id)
-            return {"success": True, "records": records}
+            return {"success": True, "records": records, "has_more": has_more}
     except Exception as err:
         _LOGGER.error("Error retrieving records: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}
@@ -1086,8 +1091,13 @@ def _get_statistics_sync(
             if end_time:
                 query = query.filter(table.start_ts <= end_time.timestamp())
 
-            query = query.order_by(table.start_ts.desc()).limit(limit)
+            # Fetch one extra record to determine whether more records exist
+            fetch_limit = limit + 1
+            query = query.order_by(table.start_ts.desc()).limit(fetch_limit)
             stats = query.all()
+            has_more = len(stats) > limit
+            if has_more:
+                stats = stats[:limit]
 
             records = []
             for stat in stats:
@@ -1140,7 +1150,7 @@ def _get_statistics_sync(
                 })
 
             _LOGGER.info("Retrieved %d statistics records for entity %s", len(records), entity_id)
-            return {"success": True, "records": records}
+            return {"success": True, "records": records, "has_more": has_more}
     except Exception as err:
         _LOGGER.error("Error retrieving statistics: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}

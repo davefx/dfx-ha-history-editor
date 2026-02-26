@@ -708,6 +708,11 @@ def _update_record_sync(
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Capture old timestamp before update (for statistics period calculation)
+            old_ts = None
+            if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                old_ts = state.last_updated_ts
+
             if new_state is not None:
                 state.state = new_state
             if new_attributes is not None:
@@ -728,6 +733,20 @@ def _update_record_sync(
 
             session.commit()
             _LOGGER.info("Updated state record %s", state_id)
+
+            # Update affected statistics if available
+            if HAS_STATISTICS and (new_state is not None or new_last_updated is not None):
+                try:
+                    _update_statistics_after_state_change(
+                        session, state, old_ts, new_last_updated
+                    )
+                    session.commit()
+                except Exception as stats_err:
+                    _LOGGER.warning(
+                        "Error updating statistics after state change for state %s: %s",
+                        state_id, stats_err
+                    )
+
             return {"success": True, "state_id": state_id}
     except Exception as err:
         _LOGGER.error("Error updating record: %s", err)
@@ -796,6 +815,176 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 f"Original error: {error_msg}"
             )
         return {"success": False, "error": error_msg}
+
+
+def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, start_ts_5min: float) -> bool:
+    """Recalculate and update a short-term statistics record for a 5-minute period.
+
+    Queries all numeric states in the period, recomputes mean/min/max/state, and
+    updates the existing StatisticsShortTerm row. Returns True if a row was updated.
+    """
+    end_ts = start_ts_5min + 300.0
+
+    states_in_period = (
+        session.query(States)
+        .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+        .filter(StatesMeta.entity_id == entity_id)
+        .filter(States.last_updated_ts >= start_ts_5min)
+        .filter(States.last_updated_ts < end_ts)
+        .order_by(States.last_updated_ts.asc())
+        .all()
+    )
+
+    numeric_values: list[float] = []
+    last_state_id: int | None = None
+    last_state_float: float | None = None
+
+    for s in states_in_period:
+        try:
+            v = float(s.state)
+            numeric_values.append(v)
+            last_state_id = s.state_id
+            last_state_float = v
+        except (ValueError, TypeError):
+            pass
+
+    short_term = session.query(StatisticsShortTerm).filter(
+        StatisticsShortTerm.metadata_id == stat_meta_id,
+        StatisticsShortTerm.start_ts == start_ts_5min,
+    ).first()
+
+    if short_term is None:
+        return False
+
+    if numeric_values:
+        short_term.mean = sum(numeric_values) / len(numeric_values)
+        short_term.min = min(numeric_values)
+        short_term.max = max(numeric_values)
+        short_term.state = last_state_float
+        if hasattr(short_term, 'state_id') and last_state_id is not None:
+            short_term.state_id = last_state_id
+    # If no numeric values exist in the period, leave existing aggregates intact
+
+    return True
+
+
+def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float) -> bool:
+    """Recalculate and update a long-term statistics record for an hourly period.
+
+    Aggregates the updated short-term stats in the hour and updates the Statistics row.
+    Returns True if a row was updated.
+    """
+    end_ts = start_ts_hour + 3600.0
+
+    short_terms = (
+        session.query(StatisticsShortTerm)
+        .filter(
+            StatisticsShortTerm.metadata_id == stat_meta_id,
+            StatisticsShortTerm.start_ts >= start_ts_hour,
+            StatisticsShortTerm.start_ts < end_ts,
+        )
+        .order_by(StatisticsShortTerm.start_ts.asc())
+        .all()
+    )
+
+    if not short_terms:
+        return False
+
+    long_term = session.query(Statistics).filter(
+        Statistics.metadata_id == stat_meta_id,
+        Statistics.start_ts == start_ts_hour,
+    ).first()
+
+    if long_term is None:
+        return False
+
+    means = [s.mean for s in short_terms if s.mean is not None]
+    mins = [s.min for s in short_terms if s.min is not None]
+    maxs = [s.max for s in short_terms if s.max is not None]
+    states = [s.state for s in short_terms if s.state is not None]
+
+    if means:
+        # Average the short-term means, consistent with how HA aggregates hourly statistics
+        long_term.mean = sum(means) / len(means)
+    if mins:
+        long_term.min = min(mins)
+    if maxs:
+        long_term.max = max(maxs)
+    if states:
+        long_term.state = states[-1]  # last value in the hourly period
+
+    return True
+
+
+def _update_statistics_after_state_change(
+    session,
+    state_record,
+    old_ts: float | None,
+    new_last_updated: datetime | None,
+) -> None:
+    """Update short-term and long-term statistics affected by a state record change.
+
+    Determines which 5-minute and hourly periods are affected (the period of the
+    old timestamp and/or the new timestamp), recalculates statistics for those
+    periods from the underlying state data, and persists the results.
+    """
+    # Collect affected period timestamps
+    affected_5min: set[float] = set()
+    affected_hour: set[float] = set()
+
+    def _add_periods(ts: float) -> None:
+        p5 = float(int(ts // 300) * 300)
+        ph = float(int(ts // 3600) * 3600)
+        affected_5min.add(p5)
+        affected_hour.add(ph)
+
+    if old_ts is not None:
+        _add_periods(old_ts)
+
+    # New timestamp after update
+    new_ts: float | None = None
+    if new_last_updated is not None:
+        new_ts = new_last_updated.timestamp()
+    elif hasattr(state_record, 'last_updated_ts') and state_record.last_updated_ts is not None:
+        new_ts = state_record.last_updated_ts
+
+    if new_ts is not None:
+        _add_periods(new_ts)
+
+    if not affected_5min:
+        return
+
+    # Resolve entity_id and StatisticsMeta
+    meta = session.query(StatesMeta).filter(
+        StatesMeta.metadata_id == state_record.metadata_id
+    ).first()
+    if meta is None:
+        return
+    entity_id = meta.entity_id
+
+    stat_meta = session.query(StatisticsMeta).filter(
+        StatisticsMeta.statistic_id == entity_id
+    ).first()
+    if stat_meta is None:
+        return
+
+    # Recalculate short-term stats for all affected 5-minute periods
+    updated_5min = 0
+    for start_ts in affected_5min:
+        if _recalculate_short_term_stat(session, stat_meta.id, entity_id, start_ts):
+            updated_5min += 1
+
+    # Recalculate long-term stats for all affected hourly periods
+    updated_hour = 0
+    for start_ts in affected_hour:
+        if _recalculate_long_term_stat(session, stat_meta.id, start_ts):
+            updated_hour += 1
+
+    if updated_5min or updated_hour:
+        _LOGGER.info(
+            "Updated statistics for entity %s: %d short-term and %d long-term period(s)",
+            entity_id, updated_5min, updated_hour,
+        )
 
 
 def _create_record_sync(

@@ -261,6 +261,10 @@ class HistoryEditorPanel extends HTMLElement {
         button.danger:hover {
           background: var(--error-state-color);
         }
+        button:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
         .table-container {
           background: var(--card-background-color);
           border-radius: 8px;
@@ -634,13 +638,13 @@ class HistoryEditorPanel extends HTMLElement {
       const target = e.target;
       
       // Handle Edit button clicks
-      if (target.classList.contains('edit-btn')) {
+      if (target.classList.contains('edit-btn') && !target.disabled) {
         const stateId = parseInt(target.dataset.stateId);
         this.editRecord(stateId);
       }
       
       // Handle Delete button clicks
-      if (target.classList.contains('delete-btn')) {
+      if (target.classList.contains('delete-btn') && !target.disabled) {
         const stateId = parseInt(target.dataset.stateId);
         this.deleteRecord(stateId);
       }
@@ -1155,9 +1159,19 @@ class HistoryEditorPanel extends HTMLElement {
     `;
 
     records.forEach(record => {
+      const locked = record.has_source_data === true;
+      const lockTitle = locked
+        ? (this.dataSource === 'statistics_short_term'
+          ? 'State history exists for this period — edit state history instead'
+          : 'Short-term statistics exist for this period — edit short-term statistics instead')
+        : '';
+      const disabledAttr = locked ? 'disabled' : '';
+      const titleAttr = locked ? `title="${lockTitle}"` : '';
+      const lockIcon = locked ? ' 🔒' : '';
+
       html += `
         <tr>
-          <td data-label="ID">${record.id}</td>
+          <td data-label="ID">${record.id}${lockIcon}</td>
           <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
           <td data-label="Mean">${fmtNum(record.mean)}</td>
           <td data-label="Min">${fmtNum(record.min)}</td>
@@ -1165,8 +1179,8 @@ class HistoryEditorPanel extends HTMLElement {
           <td data-label="Sum">${fmtNum(record.sum)}</td>
           <td data-label="State">${fmtNum(record.state)}</td>
           <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.id}">Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.id}">Delete</button>
+            <button class="secondary edit-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Edit</button>
+            <button class="danger delete-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Delete</button>
           </td>
         </tr>
       `;

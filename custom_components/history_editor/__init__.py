@@ -708,6 +708,11 @@ def _update_record_sync(
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Capture old timestamp before update (for statistics period calculation)
+            old_ts = None
+            if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                old_ts = state.last_updated_ts
+
             if new_state is not None:
                 state.state = new_state
             if new_attributes is not None:
@@ -728,6 +733,20 @@ def _update_record_sync(
 
             session.commit()
             _LOGGER.info("Updated state record %s", state_id)
+
+            # Update affected statistics if available
+            if HAS_STATISTICS and (new_state is not None or new_last_updated is not None):
+                try:
+                    _update_statistics_after_state_change(
+                        session, state, old_ts, new_last_updated
+                    )
+                    session.commit()
+                except Exception as stats_err:
+                    _LOGGER.warning(
+                        "Error updating statistics after state change for state %s: %s",
+                        state_id, stats_err
+                    )
+
             return {"success": True, "state_id": state_id}
     except Exception as err:
         _LOGGER.error("Error updating record: %s", err)
@@ -796,6 +815,176 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 f"Original error: {error_msg}"
             )
         return {"success": False, "error": error_msg}
+
+
+def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, start_ts_5min: float) -> bool:
+    """Recalculate and update a short-term statistics record for a 5-minute period.
+
+    Queries all numeric states in the period, recomputes mean/min/max/state, and
+    updates the existing StatisticsShortTerm row. Returns True if a row was updated.
+    """
+    end_ts = start_ts_5min + 300.0
+
+    states_in_period = (
+        session.query(States)
+        .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+        .filter(StatesMeta.entity_id == entity_id)
+        .filter(States.last_updated_ts >= start_ts_5min)
+        .filter(States.last_updated_ts < end_ts)
+        .order_by(States.last_updated_ts.asc())
+        .all()
+    )
+
+    numeric_values: list[float] = []
+    last_state_id: int | None = None
+    last_state_float: float | None = None
+
+    for s in states_in_period:
+        try:
+            v = float(s.state)
+            numeric_values.append(v)
+            last_state_id = s.state_id
+            last_state_float = v
+        except (ValueError, TypeError):
+            pass
+
+    short_term = session.query(StatisticsShortTerm).filter(
+        StatisticsShortTerm.metadata_id == stat_meta_id,
+        StatisticsShortTerm.start_ts == start_ts_5min,
+    ).first()
+
+    if short_term is None:
+        return False
+
+    if numeric_values:
+        short_term.mean = sum(numeric_values) / len(numeric_values)
+        short_term.min = min(numeric_values)
+        short_term.max = max(numeric_values)
+        short_term.state = last_state_float
+        if hasattr(short_term, 'state_id') and last_state_id is not None:
+            short_term.state_id = last_state_id
+    # If no numeric values exist in the period, leave existing aggregates intact
+
+    return True
+
+
+def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float) -> bool:
+    """Recalculate and update a long-term statistics record for an hourly period.
+
+    Aggregates the updated short-term stats in the hour and updates the Statistics row.
+    Returns True if a row was updated.
+    """
+    end_ts = start_ts_hour + 3600.0
+
+    short_terms = (
+        session.query(StatisticsShortTerm)
+        .filter(
+            StatisticsShortTerm.metadata_id == stat_meta_id,
+            StatisticsShortTerm.start_ts >= start_ts_hour,
+            StatisticsShortTerm.start_ts < end_ts,
+        )
+        .order_by(StatisticsShortTerm.start_ts.asc())
+        .all()
+    )
+
+    if not short_terms:
+        return False
+
+    long_term = session.query(Statistics).filter(
+        Statistics.metadata_id == stat_meta_id,
+        Statistics.start_ts == start_ts_hour,
+    ).first()
+
+    if long_term is None:
+        return False
+
+    means = [s.mean for s in short_terms if s.mean is not None]
+    mins = [s.min for s in short_terms if s.min is not None]
+    maxs = [s.max for s in short_terms if s.max is not None]
+    states = [s.state for s in short_terms if s.state is not None]
+
+    if means:
+        # Average the short-term means, consistent with how HA aggregates hourly statistics
+        long_term.mean = sum(means) / len(means)
+    if mins:
+        long_term.min = min(mins)
+    if maxs:
+        long_term.max = max(maxs)
+    if states:
+        long_term.state = states[-1]  # last value in the hourly period
+
+    return True
+
+
+def _update_statistics_after_state_change(
+    session,
+    state_record,
+    old_ts: float | None,
+    new_last_updated: datetime | None,
+) -> None:
+    """Update short-term and long-term statistics affected by a state record change.
+
+    Determines which 5-minute and hourly periods are affected (the period of the
+    old timestamp and/or the new timestamp), recalculates statistics for those
+    periods from the underlying state data, and persists the results.
+    """
+    # Collect affected period timestamps
+    affected_5min: set[float] = set()
+    affected_hour: set[float] = set()
+
+    def _add_periods(ts: float) -> None:
+        p5 = float(int(ts // 300) * 300)
+        ph = float(int(ts // 3600) * 3600)
+        affected_5min.add(p5)
+        affected_hour.add(ph)
+
+    if old_ts is not None:
+        _add_periods(old_ts)
+
+    # New timestamp after update
+    new_ts: float | None = None
+    if new_last_updated is not None:
+        new_ts = new_last_updated.timestamp()
+    elif hasattr(state_record, 'last_updated_ts') and state_record.last_updated_ts is not None:
+        new_ts = state_record.last_updated_ts
+
+    if new_ts is not None:
+        _add_periods(new_ts)
+
+    if not affected_5min:
+        return
+
+    # Resolve entity_id and StatisticsMeta
+    meta = session.query(StatesMeta).filter(
+        StatesMeta.metadata_id == state_record.metadata_id
+    ).first()
+    if meta is None:
+        return
+    entity_id = meta.entity_id
+
+    stat_meta = session.query(StatisticsMeta).filter(
+        StatisticsMeta.statistic_id == entity_id
+    ).first()
+    if stat_meta is None:
+        return
+
+    # Recalculate short-term stats for all affected 5-minute periods
+    updated_5min = 0
+    for start_ts in affected_5min:
+        if _recalculate_short_term_stat(session, stat_meta.id, entity_id, start_ts):
+            updated_5min += 1
+
+    # Recalculate long-term stats for all affected hourly periods
+    updated_hour = 0
+    for start_ts in affected_hour:
+        if _recalculate_long_term_stat(session, stat_meta.id, start_ts):
+            updated_hour += 1
+
+    if updated_5min or updated_hour:
+        _LOGGER.info(
+            "Updated statistics for entity %s: %d short-term and %d long-term period(s)",
+            entity_id, updated_5min, updated_hour,
+        )
 
 
 def _create_record_sync(
@@ -908,6 +1097,38 @@ def _get_statistics_sync(
                 last_reset_iso = None
                 if hasattr(stat, 'last_reset_ts') and stat.last_reset_ts is not None:
                     last_reset_iso = dt_util.utc_from_timestamp(stat.last_reset_ts).isoformat()
+
+                # Determine whether this record is locked by underlying source data
+                has_source_data = False
+                if stat.start_ts is not None:
+                    if statistic_type == "short_term":
+                        # Locked when state history records exist in the 5-minute period
+                        try:
+                            state_count = (
+                                session.query(States)
+                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+                                .filter(StatesMeta.entity_id == entity_id)
+                                .filter(States.last_updated_ts >= stat.start_ts)
+                                .filter(States.last_updated_ts < stat.start_ts + 300.0)
+                                .count()
+                            )
+                            has_source_data = state_count > 0
+                        except Exception as check_err:
+                            _LOGGER.debug("has_source_data check failed for short-term stat %s: %s", stat.id, check_err)
+                    else:
+                        # long_term: locked when short-term stats exist in the 1-hour period
+                        try:
+                            short_term_count = (
+                                session.query(StatisticsShortTerm)
+                                .filter(StatisticsShortTerm.metadata_id == stat.metadata_id)
+                                .filter(StatisticsShortTerm.start_ts >= stat.start_ts)
+                                .filter(StatisticsShortTerm.start_ts < stat.start_ts + 3600.0)
+                                .count()
+                            )
+                            has_source_data = short_term_count > 0
+                        except Exception as check_err:
+                            _LOGGER.debug("has_source_data check failed for long-term stat %s: %s", stat.id, check_err)
+
                 records.append({
                     "id": stat.id,
                     "statistic_id": entity_id,
@@ -919,6 +1140,7 @@ def _get_statistics_sync(
                     "sum": stat.sum,
                     "state": stat.state,
                     "last_reset": last_reset_iso,
+                    "has_source_data": has_source_data,
                 })
 
             _LOGGER.info("Retrieved %d statistics records for entity %s", len(records), entity_id)
@@ -956,6 +1178,52 @@ def _update_statistic_sync(
             if stat is None:
                 return {"success": False, "error": f"Statistic ID {stat_id} not found"}
 
+            # Guard: reject direct edits when underlying source data exists
+            if stat.start_ts is not None:
+                if statistic_type == "short_term":
+                    stat_meta_row = session.query(StatisticsMeta).filter(
+                        StatisticsMeta.id == stat.metadata_id
+                    ).first()
+                    if stat_meta_row is not None:
+                        try:
+                            state_count = (
+                                session.query(States)
+                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+                                .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
+                                .filter(States.last_updated_ts >= stat.start_ts)
+                                .filter(States.last_updated_ts < stat.start_ts + 300.0)
+                                .count()
+                            )
+                            if state_count > 0:
+                                return {
+                                    "success": False,
+                                    "error": (
+                                        "Cannot edit short-term statistics directly: state history "
+                                        "records exist for this period. Edit the state history instead."
+                                    ),
+                                }
+                        except Exception as check_err:
+                            _LOGGER.warning("Source-data check failed for short-term stat %s: %s", stat_id, check_err)
+                else:
+                    try:
+                        short_term_count = (
+                            session.query(StatisticsShortTerm)
+                            .filter(StatisticsShortTerm.metadata_id == stat.metadata_id)
+                            .filter(StatisticsShortTerm.start_ts >= stat.start_ts)
+                            .filter(StatisticsShortTerm.start_ts < stat.start_ts + 3600.0)
+                            .count()
+                        )
+                        if short_term_count > 0:
+                            return {
+                                "success": False,
+                                "error": (
+                                    "Cannot edit long-term statistics directly: short-term statistics "
+                                    "records exist for this period. Edit the short-term statistics instead."
+                                ),
+                            }
+                    except Exception as check_err:
+                        _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat_id, check_err)
+
             if mean is not None:
                 stat.mean = float(mean)
             if min_val is not None:
@@ -968,6 +1236,22 @@ def _update_statistic_sync(
                 stat.state = float(state)
             if start is not None:
                 stat.start_ts = start.timestamp()
+
+            # Flush to make changes visible before cascading to long-term stats
+            session.flush()
+
+            # Cascade: after updating a short-term stat, recalculate the corresponding long-term stat
+            if statistic_type == "short_term":
+                try:
+                    effective_ts = start.timestamp() if start is not None else stat.start_ts
+                    if effective_ts is not None:
+                        start_ts_hour = float(int(effective_ts // 3600) * 3600)
+                        _recalculate_long_term_stat(session, stat.metadata_id, start_ts_hour)
+                except Exception as cascade_err:
+                    _LOGGER.warning(
+                        "Error updating long-term stat after short-term edit for stat %s: %s",
+                        stat_id, cascade_err
+                    )
 
             session.commit()
             _LOGGER.info("Updated statistic record %s", stat_id)
@@ -994,7 +1278,73 @@ def _delete_statistic_sync(
         table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
 
         with recorder.get_session() as session:
+            stat = session.query(table).filter(table.id == stat_id).first()
+            if stat is None:
+                return {"success": False, "error": f"Statistic ID {stat_id} not found"}
+
+            # Capture values needed for cascade before deletion
+            stat_start_ts = stat.start_ts
+            stat_metadata_id = stat.metadata_id
+
+            # Guard: reject direct deletes when underlying source data exists
+            if stat_start_ts is not None:
+                if statistic_type == "short_term":
+                    stat_meta_row = session.query(StatisticsMeta).filter(
+                        StatisticsMeta.id == stat_metadata_id
+                    ).first()
+                    if stat_meta_row is not None:
+                        try:
+                            state_count = (
+                                session.query(States)
+                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+                                .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
+                                .filter(States.last_updated_ts >= stat_start_ts)
+                                .filter(States.last_updated_ts < stat_start_ts + 300.0)
+                                .count()
+                            )
+                            if state_count > 0:
+                                return {
+                                    "success": False,
+                                    "error": (
+                                        "Cannot delete short-term statistics directly: state history "
+                                        "records exist for this period. Delete the state history instead."
+                                    ),
+                                }
+                        except Exception as check_err:
+                            _LOGGER.warning("Source-data check failed for short-term stat %s: %s", stat_id, check_err)
+                else:
+                    try:
+                        short_term_count = (
+                            session.query(StatisticsShortTerm)
+                            .filter(StatisticsShortTerm.metadata_id == stat_metadata_id)
+                            .filter(StatisticsShortTerm.start_ts >= stat_start_ts)
+                            .filter(StatisticsShortTerm.start_ts < stat_start_ts + 3600.0)
+                            .count()
+                        )
+                        if short_term_count > 0:
+                            return {
+                                "success": False,
+                                "error": (
+                                    "Cannot delete long-term statistics directly: short-term statistics "
+                                    "records exist for this period. Delete the short-term statistics instead."
+                                ),
+                            }
+                    except Exception as check_err:
+                        _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat_id, check_err)
+
             deleted_count = session.query(table).filter(table.id == stat_id).delete(synchronize_session=False)
+
+            # Cascade: after deleting a short-term stat, recalculate the corresponding long-term stat
+            if deleted_count > 0 and statistic_type == "short_term" and stat_start_ts is not None:
+                try:
+                    start_ts_hour = float(int(stat_start_ts // 3600) * 3600)
+                    _recalculate_long_term_stat(session, stat_metadata_id, start_ts_hour)
+                except Exception as cascade_err:
+                    _LOGGER.warning(
+                        "Error updating long-term stat after short-term delete for stat %s: %s",
+                        stat_id, cascade_err
+                    )
+
             session.commit()
 
             if deleted_count > 0:

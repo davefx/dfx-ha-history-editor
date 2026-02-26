@@ -556,6 +556,19 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Nullify old_state_id references in other states to avoid self-referential FK constraint errors
+            try:
+                refs_updated = (
+                    session.query(States)
+                    .filter(States.old_state_id == state_id)
+                    .update({"old_state_id": None}, synchronize_session=False)
+                )
+                if refs_updated > 0:
+                    _LOGGER.info("Cleared old_state_id reference in %d state(s) for state %s", refs_updated, state_id)
+            except AttributeError:
+                # old_state_id column not present in this HA version; no self-referential FK to handle
+                pass
+
             # Delete associated statistics before deleting the state to avoid foreign key constraint errors
             stats_deleted = 0
             if HAS_STATISTICS_SHORT_TERM:

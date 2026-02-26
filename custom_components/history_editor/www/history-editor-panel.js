@@ -28,6 +28,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._pageSize = 100;         // Current page size
     this._scrollObserver = null;  // IntersectionObserver for scroll sentinel
     this._topObserver = null;     // IntersectionObserver for load-prev row
+    this._mutationObserver = null; // MutationObserver to detect DOM clearing
   }
 
   _debugLog(...args) {
@@ -38,6 +39,18 @@ class HistoryEditorPanel extends HTMLElement {
 
   async connectedCallback() {
     this._debugLog('[HistoryEditor] connectedCallback called');
+    // Watch for the panel's direct children being removed (e.g. HA clearing the DOM
+    // during a websocket reconnection while the tab stays visible and hass setter is
+    // not being called). Guard against duplicate registration.
+    if (!this._mutationObserver) {
+      this._mutationObserver = new MutationObserver(() => {
+        if (!this.querySelector('#records-display')) {
+          this._debugLog('[HistoryEditor] MutationObserver: panel DOM cleared, re-initializing');
+          this._ensureInitialized();
+        }
+      });
+      this._mutationObserver.observe(this, { childList: true });
+    }
     // Wait for Home Assistant to be fully loaded
     this._debugLog('[HistoryEditor] Waiting for home-assistant custom element to be defined...');
     await customElements.whenDefined('home-assistant');
@@ -48,6 +61,11 @@ class HistoryEditorPanel extends HTMLElement {
       return;
     }
     this._ensureInitialized();
+    // Re-establish scroll observers that were torn down in disconnectedCallback.
+    // _setupScrollObserver / _setupTopObserver return early if there is nothing to
+    // observe, so it is always safe to call them here.
+    this._setupScrollObserver();
+    this._setupTopObserver();
     // Re-initialize when the browser tab becomes visible again (e.g. after long background period).
     // Guard against duplicate registration in case connectedCallback fires more than once.
     if (!this._visibilityHandler) {
@@ -68,9 +86,16 @@ class HistoryEditorPanel extends HTMLElement {
       document.removeEventListener('visibilitychange', this._visibilityHandler);
       this._visibilityHandler = null;
     }
-    // Reset initialization state so the panel re-renders properly if re-connected
-    this._initialized = false;
-    this._entityFormInitialized = false;
+    // Clean up mutation observer
+    if (this._mutationObserver) {
+      this._mutationObserver.disconnect();
+      this._mutationObserver = null;
+    }
+    // Do NOT reset _initialized or _entityFormInitialized here. HA sometimes briefly
+    // disconnects and reconnects the element during re-renders. Resetting these flags
+    // would cause renderPanel() to be called on reconnection, wiping the loaded records.
+    // The #records-display check in _ensureInitialized handles truly cleared DOM, and
+    // the constructor handles genuinely fresh instances.
     this._statusElements = {};
     if (this._scrollObserver) {
       this._scrollObserver.disconnect();

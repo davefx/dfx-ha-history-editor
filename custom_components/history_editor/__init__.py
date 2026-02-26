@@ -1,7 +1,7 @@
 """History Editor component for Home Assistant."""
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -1102,17 +1102,13 @@ def _get_statistics_sync(
                 has_source_data = False
                 if stat.start_ts is not None:
                     if statistic_type == "short_term":
-                        # Locked when state history records exist in the 5-minute period
+                        # Locked when the record falls within the recorder keep period,
+                        # since state history exists for that entire period and HA can
+                        # recalculate any short-term stat within it.
                         try:
-                            state_count = (
-                                session.query(States)
-                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
-                                .filter(StatesMeta.entity_id == entity_id)
-                                .filter(States.last_updated_ts >= stat.start_ts)
-                                .filter(States.last_updated_ts < stat.start_ts + 300.0)
-                                .count()
-                            )
-                            has_source_data = state_count > 0
+                            keep_days = getattr(recorder, "keep_days", 10)
+                            cutoff_ts = (dt_util.utcnow() - timedelta(days=keep_days)).timestamp()
+                            has_source_data = stat.start_ts >= cutoff_ts
                         except Exception as check_err:
                             _LOGGER.debug("has_source_data check failed for short-term stat %s: %s", stat.id, check_err)
                     else:

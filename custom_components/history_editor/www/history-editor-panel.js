@@ -476,6 +476,24 @@ class HistoryEditorPanel extends HTMLElement {
         .scroll-sentinel {
           height: 1px;
         }
+        .loading-indicator {
+          text-align: center;
+          padding: 48px;
+          color: var(--secondary-text-color);
+        }
+        .loading-spinner {
+          display: inline-block;
+          width: 40px;
+          height: 40px;
+          border: 4px solid var(--divider-color);
+          border-top-color: var(--primary-color);
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+          margin-bottom: 12px;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
         .loading-more-indicator {
           text-align: center;
           padding: 12px 16px;
@@ -746,6 +764,8 @@ class HistoryEditorPanel extends HTMLElement {
       return this.loadStatistics(entityId, limit);
     }
 
+    this.showLoading();
+
     try {
       // Build query parameters
       const params = new URLSearchParams({
@@ -827,6 +847,16 @@ class HistoryEditorPanel extends HTMLElement {
       alert('Error loading records: ' + error.message);
       this.showMessage('Error loading records. Please check the console for details.');
     }
+  }
+
+  showLoading() {
+    const display = this.querySelector('#records-display');
+    display.innerHTML = `
+      <div class="loading-indicator">
+        <div class="loading-spinner"></div>
+        <p>Loading records…</p>
+      </div>
+    `;
   }
 
   showMessage(message) {
@@ -1148,6 +1178,7 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   async loadStatistics(entityId, limit) {
+    this.showLoading();
     try {
       const statisticType = this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term';
       const params = new URLSearchParams({

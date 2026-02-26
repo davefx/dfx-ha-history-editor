@@ -204,7 +204,21 @@ class HistoryEditorPanel extends HTMLElement {
     this._debugLog('[HistoryEditor] renderPanel called');
     this._statusElements = {}; // Clear cached status elements
     this._entityFormInitialized = false; // Reset form initialization flag
-    
+
+    // Apply layout styles directly to the host element. The :host CSS rule in the
+    // inline <style> tag only works inside a shadow DOM, so when HA renders this
+    // element in its own shadow DOM context the :host selector does not match this
+    // element. Setting the properties here guarantees the flex-column layout and
+    // bounded height required for .table-container's overflow:auto to work.
+    this.style.display = 'flex';
+    this.style.flexDirection = 'column';
+    this.style.height = '100%';
+    this.style.overflow = 'hidden';
+    this.style.boxSizing = 'border-box';
+    this.style.padding = '16px';
+    this.style.background = 'var(--primary-background-color)';
+    this.style.color = 'var(--primary-text-color)';
+
     this._debugLog('[HistoryEditor] Setting innerHTML to render panel UI');
     this.innerHTML = `
       <style>

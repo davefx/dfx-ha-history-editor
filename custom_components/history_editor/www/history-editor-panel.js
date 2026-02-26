@@ -30,7 +30,36 @@ class HistoryEditorPanel extends HTMLElement {
     this._debugLog('[HistoryEditor] Waiting for home-assistant custom element to be defined...');
     await customElements.whenDefined('home-assistant');
     this._debugLog('[HistoryEditor] home-assistant custom element is now defined');
+    // Guard: element may have been disconnected while awaiting
+    if (!this.isConnected) {
+      this._debugLog('[HistoryEditor] Element disconnected before initialization, skipping');
+      return;
+    }
     this._ensureInitialized();
+    // Re-initialize when the browser tab becomes visible again (e.g. after long background period).
+    // Guard against duplicate registration in case connectedCallback fires more than once.
+    if (!this._visibilityHandler) {
+      this._visibilityHandler = () => {
+        if (!document.hidden) {
+          this._debugLog('[HistoryEditor] Tab became visible, checking panel state');
+          this._ensureInitialized();
+        }
+      };
+      document.addEventListener('visibilitychange', this._visibilityHandler);
+    }
+  }
+
+  disconnectedCallback() {
+    this._debugLog('[HistoryEditor] disconnectedCallback called');
+    // Clean up visibility listener
+    if (this._visibilityHandler) {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = null;
+    }
+    // Reset initialization state so the panel re-renders properly if re-connected
+    this._initialized = false;
+    this._entityFormInitialized = false;
+    this._statusElements = {};
   }
 
   set hass(hass) {
@@ -114,6 +143,11 @@ class HistoryEditorPanel extends HTMLElement {
     if (!this._initialized) {
       this._debugLog('[HistoryEditor] Initializing panel for the first time');
       this._initialized = true;
+      this.renderPanel();
+    } else if (!this.querySelector('#records-display')) {
+      // Panel was previously initialized but DOM was cleared (e.g. after HA reconnection)
+      this._debugLog('[HistoryEditor] Panel DOM was cleared, re-initializing');
+      this._entityFormInitialized = false;
       this.renderPanel();
     }
   }

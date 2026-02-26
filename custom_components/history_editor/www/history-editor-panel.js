@@ -229,12 +229,13 @@ class HistoryEditorPanel extends HTMLElement {
         .table-container {
           background: var(--card-background-color);
           border-radius: 8px;
-          overflow: hidden;
+          overflow-x: auto;
           box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         table {
           width: 100%;
           border-collapse: collapse;
+          min-width: 480px;
         }
         th {
           background: var(--secondary-background-color);
@@ -257,6 +258,61 @@ class HistoryEditorPanel extends HTMLElement {
         .actions button {
           padding: 4px 8px;
           font-size: 12px;
+        }
+        @media (max-width: 600px) {
+          .controls {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .control-group, .entity-form-container {
+            width: 100%;
+            min-width: unset;
+          }
+          .control-group input {
+            width: 100%;
+            box-sizing: border-box;
+          }
+          #go-to-btn, #clear-date-btn, #add-btn {
+            width: 100%;
+          }
+          table, thead, tbody, th, td, tr {
+            display: block;
+          }
+          thead tr {
+            display: none;
+          }
+          tbody tr {
+            margin-bottom: 12px;
+            border: 1px solid var(--divider-color);
+            border-radius: 4px;
+            overflow: hidden;
+            min-width: unset;
+          }
+          td {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--divider-color);
+          }
+          td:last-child {
+            border-bottom: none;
+          }
+          td::before {
+            content: attr(data-label);
+            font-weight: 500;
+            margin-right: 8px;
+            flex-shrink: 0;
+          }
+          td.actions {
+            justify-content: flex-end;
+          }
+          td.actions::before {
+            display: none;
+          }
+          .table-container {
+            overflow-x: unset;
+          }
         }
         .empty-state {
           text-align: center;
@@ -665,10 +721,10 @@ class HistoryEditorPanel extends HTMLElement {
 
       html += `
         <tr>
-          <td>${record.state_id}</td>
-          <td>${this.escapeHtml(record.state)}</td>
-          <td class="attribute-preview" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
-          <td>${this.formatDatetimeDisplay(record.last_updated)}</td>
+          <td data-label="ID">${record.state_id}</td>
+          <td data-label="State">${this.escapeHtml(record.state)}</td>
+          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
+          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
           <td class="actions">
             <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
             <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>

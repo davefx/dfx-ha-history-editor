@@ -23,6 +23,8 @@ class HistoryEditorPanel extends HTMLElement {
     this._hasMore = false;        // Whether more records exist below current view
     this._loadingMore = false;    // Lock to prevent concurrent page loads
     this._loadingPrev = false;    // Lock to prevent concurrent prev-page loads
+    this._isAutoLoading = false;  // Cooldown flag to prevent observer-triggered load loops
+    this._autoLoadCooldownTimer = null; // Timer ID for clearing _isAutoLoading cooldown
     this._pageSize = 100;         // Current page size
     this._scrollObserver = null;  // IntersectionObserver for scroll sentinel
     this._topObserver = null;     // IntersectionObserver for load-prev row
@@ -77,6 +79,10 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._topObserver) {
       this._topObserver.disconnect();
       this._topObserver = null;
+    }
+    if (this._autoLoadCooldownTimer) {
+      clearTimeout(this._autoLoadCooldownTimer);
+      this._autoLoadCooldownTimer = null;
     }
   }
 
@@ -1423,7 +1429,7 @@ class HistoryEditorPanel extends HTMLElement {
     const tableContainer = this.querySelector('.table-container');
     this._scrollObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        if (entry.isIntersecting && this._hasMore && !this._loadingMore) {
+        if (entry.isIntersecting && this._hasMore && !this._loadingMore && !this._isAutoLoading) {
           this._loadMoreRecords();
         }
       });
@@ -1441,7 +1447,7 @@ class HistoryEditorPanel extends HTMLElement {
     const tableContainer = this.querySelector('.table-container');
     this._topObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        if (entry.isIntersecting && this._domFirst > 0 && !this._loadingPrev) {
+        if (entry.isIntersecting && this._domFirst > 0 && !this._loadingPrev && !this._isAutoLoading) {
           this._loadPrevRecords();
         }
       });
@@ -1590,6 +1596,8 @@ class HistoryEditorPanel extends HTMLElement {
   async _loadMoreRecords() {
     if (this._loadingMore || !this._hasMore || !this.selectedEntity) return;
     this._loadingMore = true;
+    if (this._autoLoadCooldownTimer) { clearTimeout(this._autoLoadCooldownTimer); this._autoLoadCooldownTimer = null; }
+    this._isAutoLoading = true;
     const indicator = this.querySelector('#loading-more-indicator');
     if (indicator) indicator.style.display = 'block';
     try {
@@ -1640,6 +1648,9 @@ class HistoryEditorPanel extends HTMLElement {
       console.error('[HistoryEditor] Error loading more records:', error);
     } finally {
       this._loadingMore = false;
+      // Suppress observer-triggered auto-loads for 300ms to prevent feedback loops
+      // after DOM mutations (pruning pages) re-expose sentinels to the viewport.
+      this._autoLoadCooldownTimer = setTimeout(() => { this._isAutoLoading = false; this._autoLoadCooldownTimer = null; }, 300);
       const ind = this.querySelector('#loading-more-indicator');
       if (ind) ind.style.display = 'none';
     }
@@ -1648,6 +1659,8 @@ class HistoryEditorPanel extends HTMLElement {
   async _loadPrevRecords() {
     if (this._loadingPrev || this._domFirst === 0) return;
     this._loadingPrev = true;
+    if (this._autoLoadCooldownTimer) { clearTimeout(this._autoLoadCooldownTimer); this._autoLoadCooldownTimer = null; }
+    this._isAutoLoading = true;
     try {
       const prevPageIdx = this._domFirst - 1;
       const cursorEndTime = this._pageCursors[prevPageIdx];
@@ -1693,6 +1706,9 @@ class HistoryEditorPanel extends HTMLElement {
       console.error('[HistoryEditor] Error loading previous records:', error);
     } finally {
       this._loadingPrev = false;
+      // Suppress observer-triggered auto-loads for 300ms to prevent feedback loops
+      // after DOM mutations (pruning pages) re-expose sentinels to the viewport.
+      this._autoLoadCooldownTimer = setTimeout(() => { this._isAutoLoading = false; this._autoLoadCooldownTimer = null; }, 300);
     }
   }
 

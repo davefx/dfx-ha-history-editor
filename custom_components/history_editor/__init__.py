@@ -942,7 +942,10 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
         short_term.state = last_state_float
         if hasattr(short_term, 'state_id') and last_state_id is not None:
             short_term.state_id = last_state_id
-    # If no numeric values exist in the period, leave existing aggregates intact
+    else:
+        # No numeric states exist in the period (e.g. all records were deleted).
+        # Remove the stale statistics row so that callers no longer see outdated data.
+        session.delete(short_term)
 
     return True
 
@@ -966,13 +969,18 @@ def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float
         .all()
     )
 
-    if not short_terms:
-        return False
-
     long_term = session.query(Statistics).filter(
         Statistics.metadata_id == stat_meta_id,
         Statistics.start_ts == start_ts_hour,
     ).first()
+
+    if not short_terms:
+        # No short-term stats remain in this period (e.g. all underlying records were
+        # deleted). Remove the stale long-term row so callers no longer see outdated data.
+        if long_term is not None:
+            session.delete(long_term)
+            return True
+        return False
 
     if long_term is None:
         return False

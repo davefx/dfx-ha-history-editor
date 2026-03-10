@@ -15,6 +15,17 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
+# Import recorder statistics events for cache invalidation signalling.
+# Fall back to the string literals for HA versions that predate the constants.
+try:
+    from homeassistant.const import (
+        EVENT_RECORDER_5MIN_STATISTICS_GENERATED,
+        EVENT_RECORDER_HOURLY_STATISTICS_GENERATED,
+    )
+except ImportError:
+    EVENT_RECORDER_5MIN_STATISTICS_GENERATED = "recorder_5min_statistics_generated"
+    EVENT_RECORDER_HOURLY_STATISTICS_GENERATED = "recorder_hourly_statistics_generated"
+
 from .panel import async_register_panel
 
 _LOGGER = logging.getLogger(__name__)
@@ -210,9 +221,12 @@ class UpdateRecordView(HomeAssistantView):
                 new_last_changed,
                 new_last_updated,
             )
-            
+
+            # Signal the frontend to refresh its statistics cache
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
             return self.json(result)
-            
+
         except Exception as err:
             _LOGGER.error("Error in UpdateRecordView: %s", err)
             return self.json(
@@ -248,7 +262,11 @@ class DeleteRecordView(HomeAssistantView):
             result = await self.hass.async_add_executor_job(
                 _delete_record_sync, self.hass, int(state_id)
             )
-            
+
+            # Signal the frontend to refresh its statistics cache
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
             return self.json(result)
             
         except Exception as err:
@@ -324,7 +342,11 @@ class CreateRecordView(HomeAssistantView):
                 last_changed,
                 last_updated,
             )
-            
+
+            # Signal the frontend to refresh its statistics cache
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
             return self.json(result)
             
         except Exception as err:
@@ -470,6 +492,11 @@ class UpdateStatisticView(HomeAssistantView):
                 start,
                 statistic_type,
             )
+
+            # Signal the frontend to refresh its statistics cache
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
             return self.json(result)
 
         except Exception as err:
@@ -513,6 +540,11 @@ class DeleteStatisticView(HomeAssistantView):
             result = await self.hass.async_add_executor_job(
                 _delete_statistic_sync, self.hass, int(stat_id), statistic_type
             )
+
+            # Signal the frontend to refresh its statistics cache
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
             return self.json(result)
 
         except Exception as err:
@@ -623,6 +655,17 @@ def _get_records_sync(
         return {"success": False, "error": str(err)}
 
 
+def _fire_statistics_events(hass: HomeAssistant) -> None:
+    """Fire recorder events so the HA frontend refreshes its statistics cache.
+
+    The frontend subscribes to these events and re-fetches statistics data
+    when it receives them.  We fire them after every direct DB modification
+    so that graphs and history panels reflect the corrected values immediately.
+    """
+    hass.bus.async_fire(EVENT_RECORDER_5MIN_STATISTICS_GENERATED)
+    hass.bus.async_fire(EVENT_RECORDER_HOURLY_STATISTICS_GENERATED)
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Editor component."""
     _LOGGER.info("Setting up History Editor component")
@@ -656,7 +699,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         new_last_changed = call.data.get("last_changed")
         new_last_updated = call.data.get("last_updated")
 
-        await hass.async_add_executor_job(
+        result = await hass.async_add_executor_job(
             _update_record_sync,
             hass,
             state_id,
@@ -665,12 +708,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             new_last_changed,
             new_last_updated,
         )
+        if result.get("success"):
+            _fire_statistics_events(hass)
 
     async def delete_record(call: ServiceCall) -> None:
         """Delete a history record."""
         state_id = call.data["state_id"]
 
-        await hass.async_add_executor_job(_delete_record_sync, hass, state_id)
+        result = await hass.async_add_executor_job(_delete_record_sync, hass, state_id)
+        if result.get("success"):
+            _fire_statistics_events(hass)
 
     async def create_record(call: ServiceCall) -> None:
         """Create a new history record."""
@@ -680,9 +727,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         last_changed = call.data.get("last_changed", dt_util.utcnow())
         last_updated = call.data.get("last_updated", dt_util.utcnow())
 
-        await hass.async_add_executor_job(
+        result = await hass.async_add_executor_job(
             _create_record_sync, hass, entity_id, state, attributes, last_changed, last_updated
         )
+        if result.get("success"):
+            _fire_statistics_events(hass)
 
     async def recalculate_statistics(call: ServiceCall) -> ServiceResponse:
         """Force recalculation of statistics for an entity over a time range."""
@@ -699,6 +748,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             end_time,
             statistic_type,
         )
+        if result.get("success"):
+            _fire_statistics_events(hass)
         return result
 
     # Register services

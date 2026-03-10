@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import voluptuous as vol
@@ -30,11 +31,16 @@ except ImportError:
 
 DOMAIN = "history_editor"
 
+# Statistics period durations in seconds
+SHORT_TERM_PERIOD_SECONDS = 300    # 5-minute short-term statistics
+LONG_TERM_PERIOD_SECONDS = 3600    # 1-hour long-term statistics
+
 # Service names
 SERVICE_GET_RECORDS = "get_records"
 SERVICE_UPDATE_RECORD = "update_record"
 SERVICE_DELETE_RECORD = "delete_record"
 SERVICE_CREATE_RECORD = "create_record"
+SERVICE_RECALCULATE_STATISTICS = "recalculate_statistics"
 
 # Service schemas
 SERVICE_GET_RECORDS_SCHEMA = vol.Schema({
@@ -62,6 +68,13 @@ SERVICE_CREATE_RECORD_SCHEMA = vol.Schema({
     vol.Optional("attributes"): dict,
     vol.Optional("last_changed"): cv.datetime,
     vol.Optional("last_updated"): cv.datetime,
+})
+
+SERVICE_RECALCULATE_STATISTICS_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_id,
+    vol.Required("start_time"): cv.datetime,
+    vol.Required("end_time"): cv.datetime,
+    vol.Optional("statistic_type", default="both"): vol.In(["short_term", "long_term", "both"]),
 })
 
 
@@ -510,6 +523,7 @@ class DeleteStatisticView(HomeAssistantView):
             )
 
 
+
 def _get_records_sync(
     hass: HomeAssistant,
     entity_id: str,
@@ -670,6 +684,23 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _create_record_sync, hass, entity_id, state, attributes, last_changed, last_updated
         )
 
+    async def recalculate_statistics(call: ServiceCall) -> ServiceResponse:
+        """Force recalculation of statistics for an entity over a time range."""
+        entity_id = call.data["entity_id"]
+        start_time = call.data["start_time"]
+        end_time = call.data["end_time"]
+        statistic_type = call.data.get("statistic_type", "both")
+
+        result = await hass.async_add_executor_job(
+            _recalculate_statistics_sync,
+            hass,
+            entity_id,
+            start_time,
+            end_time,
+            statistic_type,
+        )
+        return result
+
     # Register services
     hass.services.async_register(
         DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
@@ -683,6 +714,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_CREATE_RECORD, create_record, schema=SERVICE_CREATE_RECORD_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RECALCULATE_STATISTICS, recalculate_statistics,
+        schema=SERVICE_RECALCULATE_STATISTICS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
 
     # Register the frontend panel
@@ -773,6 +809,15 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Capture state info needed for statistics recalculation before the record is deleted
+            state_ts: float | None = None
+            state_metadata_id: int | None = None
+            if HAS_STATISTICS:
+                if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                    state_ts = state.last_updated_ts
+                if hasattr(state, 'metadata_id') and state.metadata_id is not None:
+                    state_metadata_id = state.metadata_id
+
             # Nullify old_state_id references in other states to avoid self-referential FK constraint errors
             try:
                 refs_updated = (
@@ -805,6 +850,35 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
             
             if deleted_count > 0:
                 _LOGGER.info("Deleted state record %s (and %d statistics)", state_id, stats_deleted)
+
+                # Recalculate short-term and long-term statistics for the affected time periods.
+                # The deleted state may have been the anchor for a short-term stat row (which was
+                # removed above via the FK), and the corresponding long-term (hourly) stat must
+                # now be recalculated from the remaining short-term data.
+                if HAS_STATISTICS and state_ts is not None and state_metadata_id is not None:
+                    try:
+                        # Build a lightweight proxy so we can reuse the existing helper without
+                        # needing the original (now-deleted) state object.
+                        # last_updated_ts is set to None so that _update_statistics_after_state_change
+                        # does not add a second "new" period — only the period containing the deleted
+                        # state (captured in state_ts / old_ts) will be recalculated.
+                        state_proxy = SimpleNamespace(
+                            metadata_id=state_metadata_id,
+                            last_updated_ts=None,
+                        )
+                        _update_statistics_after_state_change(
+                            session, state_proxy, state_ts, None
+                        )
+                        # Commit statistics updates separately; the primary deletion was already
+                        # committed above. A failure here is non-fatal — the state record is
+                        # gone and statistics will remain stale rather than rolling back the delete.
+                        session.commit()
+                    except Exception as stats_err:
+                        _LOGGER.warning(
+                            "Error recalculating statistics after state deletion for state %s: %s",
+                            state_id, stats_err,
+                        )
+
                 return {"success": True, "state_id": state_id, "statistics_deleted": stats_deleted}
             else:
                 return {"success": False, "error": f"Failed to delete state {state_id}"}
@@ -1360,4 +1434,90 @@ def _delete_statistic_sync(
                 return {"success": False, "error": f"Statistic ID {stat_id} not found"}
     except Exception as err:
         _LOGGER.error("Error deleting statistic: %s", err)
+        return {"success": False, "error": str(err)}
+
+
+def _recalculate_statistics_sync(
+    hass: HomeAssistant,
+    entity_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    statistic_type: str = "both",
+) -> dict[str, Any]:
+    """Force recalculation of statistics for an entity over a time range (synchronous).
+
+    For ``statistic_type`` values:
+    - ``"short_term"`` – recalculates every 5-minute StatisticsShortTerm row whose
+      period overlaps [start_time, end_time) from the underlying state history.
+    - ``"long_term"`` – recalculates every hourly Statistics row whose period
+      overlaps [start_time, end_time) by re-aggregating the short-term rows.
+    - ``"both"`` (default) – recalculates short-term first, then long-term.
+    """
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    start_ts = start_time.timestamp()
+    end_ts = end_time.timestamp()
+
+    if end_ts <= start_ts:
+        return {"success": False, "error": "end_time must be after start_time"}
+
+    try:
+        with recorder.get_session() as session:
+            # Resolve the StatisticsMeta row for this entity
+            stat_meta = session.query(StatisticsMeta).filter(
+                StatisticsMeta.statistic_id == entity_id
+            ).first()
+            if stat_meta is None:
+                return {
+                    "success": False,
+                    "error": f"No statistics metadata found for entity '{entity_id}'",
+                }
+            stat_meta_id = stat_meta.id
+
+            updated_short_term = 0
+            updated_long_term = 0
+
+            # Recalculate short-term (5-minute) statistics from state history
+            if statistic_type in ("short_term", "both"):
+                ts = float(int(start_ts // SHORT_TERM_PERIOD_SECONDS) * SHORT_TERM_PERIOD_SECONDS)
+                while ts < end_ts:
+                    if _recalculate_short_term_stat(session, stat_meta_id, entity_id, ts):
+                        updated_short_term += 1
+                    ts += SHORT_TERM_PERIOD_SECONDS
+
+            # Recalculate long-term (hourly) statistics from short-term statistics
+            if statistic_type in ("long_term", "both"):
+                ts = float(int(start_ts // LONG_TERM_PERIOD_SECONDS) * LONG_TERM_PERIOD_SECONDS)
+                while ts < end_ts:
+                    if _recalculate_long_term_stat(session, stat_meta_id, ts):
+                        updated_long_term += 1
+                    ts += LONG_TERM_PERIOD_SECONDS
+
+            session.commit()
+
+            _LOGGER.info(
+                "Recalculated statistics for entity %s (%s to %s): "
+                "%d short-term and %d long-term period(s) updated",
+                entity_id,
+                start_time.isoformat(),
+                end_time.isoformat(),
+                updated_short_term,
+                updated_long_term,
+            )
+            return {
+                "success": True,
+                "entity_id": entity_id,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "statistic_type": statistic_type,
+                "updated_short_term": updated_short_term,
+                "updated_long_term": updated_long_term,
+            }
+    except Exception as err:
+        _LOGGER.error("Error recalculating statistics: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}

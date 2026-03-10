@@ -901,6 +901,11 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
 
     Queries all numeric states in the period, recomputes mean/min/max/state, and
     updates the existing StatisticsShortTerm row. Returns True if a row was updated.
+
+    When no numeric states exist in the period (e.g. all records were deleted), the
+    last numeric state value recorded *before* the period is carried forward so the
+    statistics show a continuous "hold last value" line rather than a gap or stale data.
+    If no prior value exists at all, the stale row is removed.
     """
     end_ts = start_ts_5min + 300.0
 
@@ -943,9 +948,32 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
         if hasattr(short_term, 'state_id') and last_state_id is not None:
             short_term.state_id = last_state_id
     else:
-        # No numeric states exist in the period (e.g. all records were deleted).
-        # Remove the stale statistics row so that callers no longer see outdated data.
-        session.delete(short_term)
+        # No numeric states in this period (e.g. all records were deleted).
+        # Carry forward the last known numeric value from before this period so the
+        # statistics chart shows a continuous line rather than stale or missing data.
+        prev_state = (
+            session.query(States.state, States.last_updated_ts)
+            .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+            .filter(StatesMeta.entity_id == entity_id)
+            .filter(States.last_updated_ts < start_ts_5min)
+            .order_by(States.last_updated_ts.desc())
+            .first()
+        )
+        prev_value: float | None = None
+        if prev_state is not None:
+            try:
+                prev_value = float(prev_state.state)
+            except (ValueError, TypeError):
+                prev_value = None
+
+        if prev_value is not None:
+            short_term.mean = prev_value
+            short_term.min = prev_value
+            short_term.max = prev_value
+            short_term.state = prev_value
+        else:
+            # No prior value available either — remove the now-meaningless row.
+            session.delete(short_term)
 
     return True
 
@@ -955,6 +983,11 @@ def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float
 
     Aggregates the updated short-term stats in the hour and updates the Statistics row.
     Returns True if a row was updated.
+
+    When no short-term rows remain for the period (e.g. all underlying records were
+    deleted), the last short-term row recorded *before* the period is used to carry
+    its value forward so the long-term statistics show a continuous line.  If no prior
+    short-term row exists, the stale long-term row is removed.
     """
     end_ts = start_ts_hour + 3600.0
 
@@ -976,9 +1009,32 @@ def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float
 
     if not short_terms:
         # No short-term stats remain in this period (e.g. all underlying records were
-        # deleted). Remove the stale long-term row so callers no longer see outdated data.
+        # deleted). Carry forward the last known short-term value from before this period
+        # so the long-term chart shows a continuous line rather than stale or missing data.
+        prev_short_term = (
+            session.query(
+                StatisticsShortTerm.mean,
+                StatisticsShortTerm.min,
+                StatisticsShortTerm.max,
+                StatisticsShortTerm.state,
+            )
+            .filter(
+                StatisticsShortTerm.metadata_id == stat_meta_id,
+                StatisticsShortTerm.start_ts < start_ts_hour,
+            )
+            .order_by(StatisticsShortTerm.start_ts.desc())
+            .first()
+        )
         if long_term is not None:
-            session.delete(long_term)
+            if prev_short_term is not None and prev_short_term.state is not None:
+                prev_value = prev_short_term.state
+                long_term.mean = prev_short_term.mean if prev_short_term.mean is not None else prev_value
+                long_term.min = prev_short_term.min if prev_short_term.min is not None else prev_value
+                long_term.max = prev_short_term.max if prev_short_term.max is not None else prev_value
+                long_term.state = prev_value
+            else:
+                # No prior value available — remove the now-meaningless row.
+                session.delete(long_term)
             return True
         return False
 

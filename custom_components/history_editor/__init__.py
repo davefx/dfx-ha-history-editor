@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import voluptuous as vol
@@ -773,6 +774,15 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
                 _LOGGER.error("State with ID %s not found", state_id)
                 return {"success": False, "error": f"State ID {state_id} not found"}
 
+            # Capture state info needed for statistics recalculation before the record is deleted
+            state_ts: float | None = None
+            state_metadata_id: int | None = None
+            if HAS_STATISTICS:
+                if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                    state_ts = state.last_updated_ts
+                if hasattr(state, 'metadata_id') and state.metadata_id is not None:
+                    state_metadata_id = state.metadata_id
+
             # Nullify old_state_id references in other states to avoid self-referential FK constraint errors
             try:
                 refs_updated = (
@@ -805,6 +815,35 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
             
             if deleted_count > 0:
                 _LOGGER.info("Deleted state record %s (and %d statistics)", state_id, stats_deleted)
+
+                # Recalculate short-term and long-term statistics for the affected time periods.
+                # The deleted state may have been the anchor for a short-term stat row (which was
+                # removed above via the FK), and the corresponding long-term (hourly) stat must
+                # now be recalculated from the remaining short-term data.
+                if HAS_STATISTICS and state_ts is not None and state_metadata_id is not None:
+                    try:
+                        # Build a lightweight proxy so we can reuse the existing helper without
+                        # needing the original (now-deleted) state object.
+                        # last_updated_ts is set to None so that _update_statistics_after_state_change
+                        # does not add a second "new" period — only the period containing the deleted
+                        # state (captured in state_ts / old_ts) will be recalculated.
+                        state_proxy = SimpleNamespace(
+                            metadata_id=state_metadata_id,
+                            last_updated_ts=None,
+                        )
+                        _update_statistics_after_state_change(
+                            session, state_proxy, state_ts, None
+                        )
+                        # Commit statistics updates separately; the primary deletion was already
+                        # committed above. A failure here is non-fatal — the state record is
+                        # gone and statistics will remain stale rather than rolling back the delete.
+                        session.commit()
+                    except Exception as stats_err:
+                        _LOGGER.warning(
+                            "Error recalculating statistics after state deletion for state %s: %s",
+                            state_id, stats_err,
+                        )
+
                 return {"success": True, "state_id": state_id, "statistics_deleted": stats_deleted}
             else:
                 return {"success": False, "error": f"Failed to delete state {state_id}"}

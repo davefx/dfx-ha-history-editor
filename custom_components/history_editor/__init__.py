@@ -656,11 +656,13 @@ def _get_records_sync(
 
 
 def _fire_statistics_events(hass: HomeAssistant) -> None:
-    """Fire recorder events so the HA frontend refreshes its statistics cache.
+    """Fire recorder statistics-generated events after a direct DB modification.
 
-    The frontend subscribes to these events and re-fetches statistics data
-    when it receives them.  We fire them after every direct DB modification
-    so that graphs and history panels reflect the corrected values immediately.
+    These events notify any active WebSocket subscribers (e.g. the energy
+    dashboard) that statistics have changed.  Components that poll on a timer
+    (e.g. the statistics-graph card) or use a history-stream subscription (e.g.
+    the history panel) will only pick up the new data after the user navigates
+    away and back, or reloads the browser tab.
     """
     hass.bus.async_fire(EVENT_RECORDER_5MIN_STATISTICS_GENERATED)
     hass.bus.async_fire(EVENT_RECORDER_HOURLY_STATISTICS_GENERATED)
@@ -947,6 +949,49 @@ def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
         return {"success": False, "error": error_msg}
 
 
+def _cascade_sum_adjustment(
+    session,
+    stat_meta_id: int,
+    start_ts: float,
+    delta: float,
+) -> None:
+    """Adjust running-total sum columns from the given period onwards.
+
+    For sensors with state_class=total or state_class=total_increasing, the
+    ``sum`` column is a running total that must remain consistent across all
+    subsequent periods.  When the last-state value of a period changes by
+    *delta*, every short-term and long-term statistics row from that period
+    onward must receive the same adjustment.
+
+    This mirrors the ``_adjust_sum_statistics`` helper in HA's recorder, which
+    is not available on the public API.  We use ``synchronize_session=False``
+    for bulk performance; the caller is responsible for flushing/expiring the
+    session before reading these rows again.
+    """
+    if delta == 0:
+        return
+
+    session.query(StatisticsShortTerm).filter(
+        StatisticsShortTerm.metadata_id == stat_meta_id,
+        StatisticsShortTerm.start_ts >= start_ts,
+        StatisticsShortTerm.sum.isnot(None),
+    ).update(
+        {StatisticsShortTerm.sum: StatisticsShortTerm.sum + delta},
+        synchronize_session=False,
+    )
+
+    # Long-term (hourly) statistics: adjust from the containing hour onwards.
+    start_ts_hour = float(int(start_ts // 3600) * 3600)
+    session.query(Statistics).filter(
+        Statistics.metadata_id == stat_meta_id,
+        Statistics.start_ts >= start_ts_hour,
+        Statistics.sum.isnot(None),
+    ).update(
+        {Statistics.sum: Statistics.sum + delta},
+        synchronize_session=False,
+    )
+
+
 def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, start_ts_5min: float) -> bool:
     """Recalculate and update a short-term statistics record for a 5-minute period.
 
@@ -957,6 +1002,10 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
     last numeric state value recorded *before* the period is carried forward so the
     statistics show a continuous "hold last value" line rather than a gap or stale data.
     If no prior value exists at all, the stale row is removed.
+
+    For sensors that track a running total (state_class=total or
+    state_class=total_increasing), the ``sum`` column is cascaded forward so
+    that subsequent statistics periods remain consistent with the new value.
     """
     end_ts = start_ts_5min + 300.0
 
@@ -991,11 +1040,18 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
     if short_term is None:
         return False
 
+    # Capture old state value and whether this stat has a running sum before
+    # making any modifications.  Used for cascading sum adjustments below.
+    old_state: float | None = short_term.state
+    has_sum: bool = short_term.sum is not None
+    new_state: float | None = None
+
     if numeric_values:
         short_term.mean = sum(numeric_values) / len(numeric_values)
         short_term.min = min(numeric_values)
         short_term.max = max(numeric_values)
         short_term.state = last_state_float
+        new_state = last_state_float
         if hasattr(short_term, 'state_id') and last_state_id is not None:
             short_term.state_id = last_state_id
     else:
@@ -1022,9 +1078,17 @@ def _recalculate_short_term_stat(session, stat_meta_id: int, entity_id: str, sta
             short_term.min = prev_value
             short_term.max = prev_value
             short_term.state = prev_value
+            new_state = prev_value
         else:
             # No prior value available either — remove the now-meaningless row.
             session.delete(short_term)
+
+    # For sensors with a running sum (total / total_increasing), cascade the
+    # state-change delta to this period and every subsequent one so that the
+    # energy dashboard and statistics panels remain accurate.
+    # _cascade_sum_adjustment returns early when delta == 0, so no extra guard needed.
+    if has_sum and old_state is not None and new_state is not None:
+        _cascade_sum_adjustment(session, stat_meta_id, start_ts_5min, new_state - old_state)
 
     return True
 
@@ -1107,6 +1171,14 @@ def _recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float
     if states:
         long_term.state = states[-1]  # last value in the hourly period
 
+    # For total/total_increasing sensors the long-term sum equals the sum of
+    # the last short-term row in the hour.  The short-term sums were already
+    # cascaded forward by _recalculate_short_term_stat; we only need to mirror
+    # the last one here so the hourly row stays in sync.
+    sums = [s.sum for s in short_terms if s.sum is not None]
+    if sums:
+        long_term.sum = sums[-1]
+
     return True
 
 
@@ -1162,16 +1234,29 @@ def _update_statistics_after_state_change(
     if stat_meta is None:
         return
 
-    # Recalculate short-term stats for all affected 5-minute periods
+    # Capture the primary key before we flush/expire the session so it
+    # remains accessible afterwards without an extra DB round-trip.
+    stat_meta_id = stat_meta.id
+
+    # Recalculate short-term stats for all affected 5-minute periods.
+    # Process in chronological order so earlier sum-cascade adjustments are
+    # applied before later periods are recalculated.
     updated_5min = 0
-    for start_ts in affected_5min:
-        if _recalculate_short_term_stat(session, stat_meta.id, entity_id, start_ts):
+    for start_ts in sorted(affected_5min):
+        if _recalculate_short_term_stat(session, stat_meta_id, entity_id, start_ts):
             updated_5min += 1
+
+    # Flush pending ORM changes and expire all cached objects so that the
+    # long-term recalculation reads the freshly-updated short-term rows
+    # (including any sum-cascade bulk UPDATEs that used synchronize_session=False).
+    if updated_5min:
+        session.flush()
+        session.expire_all()
 
     # Recalculate long-term stats for all affected hourly periods
     updated_hour = 0
     for start_ts in affected_hour:
-        if _recalculate_long_term_stat(session, stat_meta.id, start_ts):
+        if _recalculate_long_term_stat(session, stat_meta_id, start_ts):
             updated_hour += 1
 
     if updated_5min or updated_hour:

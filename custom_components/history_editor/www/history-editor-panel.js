@@ -1153,7 +1153,7 @@ class HistoryEditorPanel extends HTMLElement {
         const result = await response.json();
         
         if (result.success) {
-          alert('Record created successfully');
+          alert('Record created successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
           this.hideModal();
           this.loadRecords();
         } else {
@@ -1185,7 +1185,7 @@ class HistoryEditorPanel extends HTMLElement {
         const result = await response.json();
         
         if (result.success) {
-          alert('Record updated successfully');
+          alert('Record updated successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
           this.hideModal();
           this.loadRecords();
         } else {
@@ -1224,7 +1224,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
       
       if (result.success) {
-        alert('Record deleted successfully');
+        alert('Record deleted successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
         this.loadRecords();
       } else {
         alert('Error deleting record: ' + (result.error || 'Unknown error'));
@@ -1406,7 +1406,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (result.success) {
-        alert('Statistic updated successfully');
+        alert('Statistic updated successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
         this.hideModal();
         this.loadRecords();
       } else {
@@ -1435,7 +1435,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (result.success) {
-        alert('Statistic deleted successfully');
+        alert('Statistic deleted successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
         this.loadRecords();
       } else {
         alert('Error deleting statistic: ' + (result.error || 'Unknown error'));

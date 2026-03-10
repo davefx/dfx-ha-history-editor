@@ -523,87 +523,6 @@ class DeleteStatisticView(HomeAssistantView):
             )
 
 
-class RecalculateStatisticsView(HomeAssistantView):
-    """View to force recalculation of statistics for a given time period via REST API."""
-
-    url = "/api/history_editor/statistics/recalculate"
-    name = "api:history_editor:statistics:recalculate"
-    requires_auth = True
-
-    def __init__(self, hass: HomeAssistant):
-        """Initialize the view."""
-        self.hass = hass
-
-    async def post(self, request: web.Request) -> web.Response:
-        """Recalculate statistics for an entity over a time range."""
-        try:
-            data = await request.json()
-
-            entity_id = data.get("entity_id")
-            if not entity_id:
-                return self.json(
-                    {"success": False, "error": "entity_id is required"},
-                    status_code=400
-                )
-
-            start_time_str = data.get("start_time")
-            end_time_str = data.get("end_time")
-
-            if not start_time_str:
-                return self.json(
-                    {"success": False, "error": "start_time is required"},
-                    status_code=400
-                )
-            if not end_time_str:
-                return self.json(
-                    {"success": False, "error": "end_time is required"},
-                    status_code=400
-                )
-
-            try:
-                start_time = dt_util.parse_datetime(start_time_str)
-            except (ValueError, TypeError):
-                start_time = None
-            if start_time is None:
-                return self.json(
-                    {"success": False, "error": "Invalid start_time format"},
-                    status_code=400
-                )
-
-            try:
-                end_time = dt_util.parse_datetime(end_time_str)
-            except (ValueError, TypeError):
-                end_time = None
-            if end_time is None:
-                return self.json(
-                    {"success": False, "error": "Invalid end_time format"},
-                    status_code=400
-                )
-
-            statistic_type = data.get("statistic_type", "both")
-            if statistic_type not in ("short_term", "long_term", "both"):
-                return self.json(
-                    {"success": False, "error": "statistic_type must be 'short_term', 'long_term', or 'both'"},
-                    status_code=400
-                )
-
-            result = await self.hass.async_add_executor_job(
-                _recalculate_statistics_sync,
-                self.hass,
-                entity_id,
-                start_time,
-                end_time,
-                statistic_type,
-            )
-            return self.json(result)
-
-        except Exception as err:
-            _LOGGER.error("Error in RecalculateStatisticsView: %s", err)
-            return self.json(
-                {"success": False, "error": str(err)},
-                status_code=500
-            )
-
 
 def _get_records_sync(
     hass: HomeAssistant,
@@ -716,7 +635,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(GetStatisticsView(hass))
     hass.http.register_view(UpdateStatisticView(hass))
     hass.http.register_view(DeleteStatisticView(hass))
-    hass.http.register_view(RecalculateStatisticsView(hass))
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""

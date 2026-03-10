@@ -61,7 +61,7 @@ After installation and configuration, you'll find a new "History Editor" menu it
 
 ### Services
 
-The component provides four services that can be called from automations, scripts, or Developer Tools:
+The component provides five services that can be called from automations, scripts, or Developer Tools:
 
 #### `history_editor.get_records`
 
@@ -142,6 +142,46 @@ data:
 - `attributes` (optional): Attributes as JSON object
 - `last_changed` (optional): Timestamp for last_changed (defaults to now)
 - `last_updated` (optional): Timestamp for last_updated (defaults to now)
+
+#### `history_editor.recalculate_statistics`
+
+Force recalculation of short-term and/or long-term statistics for an entity over a given time range. This is useful when state history records have been edited, created, or deleted and you want the statistics tables to reflect those changes.
+
+- **Short-term** (5-minute) statistics are recomputed directly from the underlying state history records in the database.
+- **Long-term** (hourly) statistics are recomputed by re-aggregating the short-term statistics.
+- Using `statistic_type: both` (the default) recalculates short-term first, so the hourly rows always benefit from the freshly recomputed 5-minute data.
+
+Only statistic rows that already exist in the database are updated; the service does not create new rows.
+
+```yaml
+service: history_editor.recalculate_statistics
+data:
+  entity_id: sensor.temperature
+  start_time: "2024-01-15T00:00:00"
+  end_time: "2024-01-15T23:59:59"
+  statistic_type: both
+```
+
+**Parameters:**
+- `entity_id` (required): The entity whose statistics should be recalculated
+- `start_time` (required): Start of the time range to recalculate
+- `end_time` (required): End of the time range to recalculate
+- `statistic_type` (optional): Which statistics to recalculate — `both` (default), `short_term`, or `long_term`
+
+**Response:**
+```json
+{
+  "success": true,
+  "entity_id": "sensor.temperature",
+  "start_time": "2024-01-15T00:00:00+00:00",
+  "end_time": "2024-01-15T23:59:59+00:00",
+  "statistic_type": "both",
+  "updated_short_term": 288,
+  "updated_long_term": 24
+}
+```
+
+The response is visible in **Developer Tools → Services** when "Response Data" is enabled.
 
 ## Use Cases
 

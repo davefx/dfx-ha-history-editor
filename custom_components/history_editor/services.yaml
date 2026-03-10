@@ -114,3 +114,46 @@ create_record:
       required: false
       selector:
         datetime:
+
+recalculate_statistics:
+  name: Recalculate Statistics
+  description: >
+    Force recalculation of short-term and/or long-term statistics for an entity
+    over a given time range. Short-term (5-minute) statistics are recalculated from
+    the underlying state history records; long-term (hourly) statistics are
+    recalculated by re-aggregating the short-term statistics.
+  response:
+    required: true
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The entity whose statistics should be recalculated.
+      required: true
+      selector:
+        entity:
+    start_time:
+      name: Start Time
+      description: Start of the time range to recalculate.
+      required: true
+      selector:
+        datetime:
+    end_time:
+      name: End Time
+      description: End of the time range to recalculate.
+      required: true
+      selector:
+        datetime:
+    statistic_type:
+      name: Statistic Type
+      description: >
+        Which statistics to recalculate: 'short_term' (5-minute periods from state
+        history), 'long_term' (hourly periods from short-term statistics), or 'both'
+        (short-term first, then long-term). Defaults to 'both'.
+      required: false
+      default: both
+      selector:
+        select:
+          options:
+            - both
+            - short_term
+            - long_term

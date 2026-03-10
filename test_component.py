@@ -89,7 +89,7 @@ def test_services_yaml():
         with open("custom_components/history_editor/services.yaml") as f:
             services = yaml.safe_load(f)
         
-        required_services = ["get_records", "update_record", "delete_record", "create_record"]
+        required_services = ["get_records", "update_record", "delete_record", "create_record", "recalculate_statistics"]
         for service in required_services:
             if service in services:
                 logger.info(f"✓ Service '{service}' defined")

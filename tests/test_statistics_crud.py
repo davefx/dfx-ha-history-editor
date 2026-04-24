@@ -1,0 +1,375 @@
+"""CRUD tests for statistics records.
+
+Exercises ``get_statistics_sync``, ``update_statistic_sync`` and
+``delete_statistic_sync`` — including the "source-data guard" that blocks
+direct edits/deletes when underlying data still exists.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+pytest.importorskip("homeassistant.components.recorder.db_schema")
+
+from homeassistant.components.recorder.db_schema import (  # noqa: E402
+    States,
+    Statistics,
+    StatisticsShortTerm,
+)
+
+from custom_components.history_editor.statistics import (  # noqa: E402
+    delete_statistic_sync,
+    get_statistics_sync,
+    update_statistic_sync,
+)
+
+
+def _add_short_term(session, metadata_id, start_ts, **cols):
+    row = StatisticsShortTerm(metadata_id=metadata_id, start_ts=start_ts, **cols)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _add_long_term(session, metadata_id, start_ts, **cols):
+    row = Statistics(metadata_id=metadata_id, start_ts=start_ts, **cols)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _add_state(session, metadata_id, ts, state):
+    s = States(
+        metadata_id=metadata_id, state=state, attributes="{}",
+        last_updated_ts=ts, last_changed_ts=ts,
+    )
+    session.add(s)
+    session.flush()
+    return s
+
+
+# --------------------------------------------------------------------------
+# get_statistics_sync
+# --------------------------------------------------------------------------
+
+
+class TestGetStatisticsSync:
+    def test_returns_long_term_rows_newest_first(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, entity_id = sample_entity
+        _add_long_term(db_session, stat_meta_id, start_ts=3600.0, state=1.0, mean=1.0)
+        _add_long_term(db_session, stat_meta_id, start_ts=7200.0, state=2.0, mean=2.0)
+        _add_long_term(db_session, stat_meta_id, start_ts=10800.0, state=3.0, mean=3.0)
+
+        result = get_statistics_sync(
+            mock_hass, entity_id, None, None, limit=100, statistic_type="long_term",
+        )
+
+        assert result["success"] is True
+        states = [r["state"] for r in result["records"]]
+        assert states == [3.0, 2.0, 1.0]
+        assert result["has_more"] is False
+
+    def test_returns_short_term_rows(self, db_session, mock_hass, sample_entity):
+        _, stat_meta_id, entity_id = sample_entity
+        _add_short_term(db_session, stat_meta_id, start_ts=0.0, state=0.5, mean=0.5)
+        _add_short_term(db_session, stat_meta_id, start_ts=300.0, state=1.5, mean=1.5)
+
+        result = get_statistics_sync(
+            mock_hass, entity_id, None, None, limit=100, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        assert len(result["records"]) == 2
+        assert all(r["statistic_type"] == "short_term" for r in result["records"])
+
+    def test_respects_limit_and_reports_has_more(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, entity_id = sample_entity
+        for i in range(5):
+            _add_long_term(db_session, stat_meta_id, start_ts=3600.0 * i, state=float(i))
+
+        result = get_statistics_sync(
+            mock_hass, entity_id, None, None, limit=3, statistic_type="long_term",
+        )
+
+        assert result["success"] is True
+        assert len(result["records"]) == 3
+        assert result["has_more"] is True
+
+    def test_filters_by_start_and_end_time(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, entity_id = sample_entity
+        _add_long_term(db_session, stat_meta_id, start_ts=3600.0, state=1.0)
+        _add_long_term(db_session, stat_meta_id, start_ts=7200.0, state=2.0)
+        _add_long_term(db_session, stat_meta_id, start_ts=10800.0, state=3.0)
+
+        start = datetime.fromtimestamp(5400, tz=timezone.utc)
+        end = datetime.fromtimestamp(9000, tz=timezone.utc)
+        result = get_statistics_sync(
+            mock_hass, entity_id, start, end, limit=100, statistic_type="long_term",
+        )
+
+        assert [r["state"] for r in result["records"]] == [2.0]
+
+    def test_long_term_record_marked_as_locked_when_short_term_exists(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, entity_id = sample_entity
+        hour_start = 3600.0 * 100
+        _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
+        _add_short_term(db_session, stat_meta_id, start_ts=hour_start + 300, state=1.0)
+
+        result = get_statistics_sync(
+            mock_hass, entity_id, None, None, limit=10, statistic_type="long_term",
+        )
+
+        assert result["records"][0]["has_source_data"] is True
+
+    def test_long_term_record_unlocked_when_no_short_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, entity_id = sample_entity
+        hour_start = 3600.0 * 100
+        _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
+        # No short-term rows in this hour
+
+        result = get_statistics_sync(
+            mock_hass, entity_id, None, None, limit=10, statistic_type="long_term",
+        )
+
+        assert result["records"][0]["has_source_data"] is False
+
+
+# --------------------------------------------------------------------------
+# update_statistic_sync
+# --------------------------------------------------------------------------
+
+
+class TestUpdateStatisticSync:
+    def test_updates_long_term_fields(self, db_session, mock_hass, sample_entity):
+        _, stat_meta_id, _ = sample_entity
+        row = _add_long_term(
+            db_session, stat_meta_id, start_ts=3600.0,
+            mean=1.0, min=0.0, max=2.0, state=1.5, sum=10.0,
+        )
+
+        result = update_statistic_sync(
+            mock_hass, row.id,
+            mean=5.0, min_val=4.0, max_val=6.0, sum_val=50.0, state=5.5,
+            start=None, statistic_type="long_term",
+        )
+
+        assert result["success"] is True
+        assert result["id"] == row.id
+        db_session.expire_all()
+        reloaded = db_session.get(Statistics, row.id)
+        assert reloaded.mean == 5.0
+        assert reloaded.min == 4.0
+        assert reloaded.max == 6.0
+        assert reloaded.sum == 50.0
+        assert reloaded.state == 5.5
+
+    def test_returns_error_when_id_not_found(self, db_session, mock_hass):
+        result = update_statistic_sync(
+            mock_hass, 999_999, 1.0, 1.0, 1.0, 1.0, 1.0, None,
+            statistic_type="long_term",
+        )
+
+        assert result["success"] is False
+        assert "999999" in result["error"]
+
+    def test_blocks_short_term_edit_when_state_history_exists(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        states_meta_id, stat_meta_id, _ = sample_entity
+        start = 1_700_000_000.0
+        row = _add_short_term(db_session, stat_meta_id, start_ts=start, state=1.0, mean=1.0)
+        # State within the same 5-min bucket → edit must be blocked
+        _add_state(db_session, states_meta_id, start + 60, "5.0")
+
+        result = update_statistic_sync(
+            mock_hass, row.id, mean=99.0, min_val=None, max_val=None,
+            sum_val=None, state=None, start=None, statistic_type="short_term",
+        )
+
+        assert result["success"] is False
+        assert "state history" in result["error"].lower()
+
+    def test_blocks_long_term_edit_when_short_term_exists(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        row = _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
+        _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300, state=2.0,
+        )
+
+        result = update_statistic_sync(
+            mock_hass, row.id, mean=99.0, min_val=None, max_val=None,
+            sum_val=None, state=None, start=None, statistic_type="long_term",
+        )
+
+        assert result["success"] is False
+        assert "short-term" in result["error"].lower()
+
+    def test_short_term_update_cascades_to_long_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Editing a short-term stat (with no underlying state history) should
+        refresh the containing hour's long-term row."""
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        # One short-term row in the hour, no underlying States → edit is allowed
+        short = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            state=1.0, mean=1.0, min=1.0, max=1.0,
+        )
+        long_row = _add_long_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            state=0.0, mean=0.0, min=0.0, max=0.0,
+        )
+
+        result = update_statistic_sync(
+            mock_hass, short.id,
+            mean=7.0, min_val=6.0, max_val=8.0, sum_val=None, state=7.5, start=None,
+            statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        db_session.expire_all()
+        reloaded_long = db_session.get(Statistics, long_row.id)
+        # Long-term is re-aggregated from the single (now-edited) short-term row
+        assert reloaded_long.mean == 7.0
+        assert reloaded_long.state == 7.5
+
+    def test_leaves_none_fields_alone(self, db_session, mock_hass, sample_entity):
+        _, stat_meta_id, _ = sample_entity
+        row = _add_long_term(
+            db_session, stat_meta_id, start_ts=3600.0,
+            mean=1.0, min=0.0, max=2.0, sum=10.0, state=1.5,
+        )
+
+        # Only update mean; everything else stays put
+        update_statistic_sync(
+            mock_hass, row.id, mean=99.0, min_val=None, max_val=None,
+            sum_val=None, state=None, start=None, statistic_type="long_term",
+        )
+
+        db_session.expire_all()
+        reloaded = db_session.get(Statistics, row.id)
+        assert reloaded.mean == 99.0
+        assert reloaded.min == 0.0
+        assert reloaded.max == 2.0
+        assert reloaded.sum == 10.0
+        assert reloaded.state == 1.5
+
+
+# --------------------------------------------------------------------------
+# delete_statistic_sync
+# --------------------------------------------------------------------------
+
+
+class TestDeleteStatisticSync:
+    def test_deletes_long_term_row(self, db_session, mock_hass, sample_entity):
+        _, stat_meta_id, _ = sample_entity
+        row = _add_long_term(db_session, stat_meta_id, start_ts=3600.0, state=1.0)
+        row_id = row.id
+
+        result = delete_statistic_sync(mock_hass, row_id, statistic_type="long_term")
+
+        assert result["success"] is True
+        assert result["id"] == row_id
+        db_session.expire_all()
+        assert db_session.get(Statistics, row_id) is None
+
+    def test_deletes_short_term_row_when_no_source_data(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, _ = sample_entity
+        row = _add_short_term(
+            db_session, stat_meta_id, start_ts=3600.0 * 100, state=1.0,
+        )
+        row_id = row.id
+
+        result = delete_statistic_sync(
+            mock_hass, row_id, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        db_session.expire_all()
+        assert db_session.get(StatisticsShortTerm, row_id) is None
+
+    def test_returns_error_when_id_not_found(self, db_session, mock_hass):
+        result = delete_statistic_sync(
+            mock_hass, 999_999, statistic_type="long_term",
+        )
+
+        assert result["success"] is False
+        assert "999999" in result["error"]
+
+    def test_blocks_short_term_delete_when_state_history_exists(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        states_meta_id, stat_meta_id, _ = sample_entity
+        start = 1_700_000_000.0
+        row = _add_short_term(db_session, stat_meta_id, start_ts=start, state=1.0)
+        _add_state(db_session, states_meta_id, start + 60, "5.0")
+
+        result = delete_statistic_sync(
+            mock_hass, row.id, statistic_type="short_term",
+        )
+
+        assert result["success"] is False
+        assert "state history" in result["error"].lower()
+        # Row still present
+        db_session.expire_all()
+        assert db_session.get(StatisticsShortTerm, row.id) is not None
+
+    def test_blocks_long_term_delete_when_short_term_exists(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        row = _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
+        _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300, state=2.0,
+        )
+
+        result = delete_statistic_sync(
+            mock_hass, row.id, statistic_type="long_term",
+        )
+
+        assert result["success"] is False
+        assert "short-term" in result["error"].lower()
+        db_session.expire_all()
+        assert db_session.get(Statistics, row.id) is not None
+
+    def test_short_term_delete_cascades_to_long_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Deleting the only short-term row in an hour should update the
+        containing long-term row (via recalculate_long_term_stat fallback)."""
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        short = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start, state=5.0, mean=5.0,
+        )
+        long_row = _add_long_term(
+            db_session, stat_meta_id, start_ts=hour_start, state=5.0, mean=5.0,
+        )
+        long_id = long_row.id
+
+        result = delete_statistic_sync(
+            mock_hass, short.id, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        db_session.expire_all()
+        # With no prior short-term, the long-term row is removed by the fallback
+        assert db_session.get(Statistics, long_id) is None

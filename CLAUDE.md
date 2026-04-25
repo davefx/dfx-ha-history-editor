@@ -63,6 +63,10 @@ Both wrap the same `_*_sync` function via `hass.async_add_executor_job(...)`. Wh
 | Update stat | — | `POST /api/history_editor/statistics/update` | `_update_statistic_sync` |
 | Delete stat | — | `POST /api/history_editor/statistics/delete` | `_delete_statistic_sync` |
 | Recalc stats | `recalculate_statistics` | — | `_recalculate_statistics_sync` |
+| Bulk update states | `bulk_update_record` | `POST /api/history_editor/bulk_update` | `_bulk_update_record_sync` |
+| Bulk delete states | `bulk_delete_record` | `POST /api/history_editor/bulk_delete` | `_bulk_delete_record_sync` |
+| Bulk update stats | `bulk_update_statistic` | `POST /api/history_editor/statistics/bulk_update` | `bulk_update_statistic_sync` |
+| Bulk delete stats | `bulk_delete_statistic` | `POST /api/history_editor/statistics/bulk_delete` | `bulk_delete_statistic_sync` |
 
 `get_records` and `recalculate_statistics` use `SupportsResponse.ONLY` so their results are visible in Dev Tools; the mutation services return `None` and raise `HomeAssistantError` on failure (so automations see the error). State-mutation responses include a `statistics_stale: bool` flag that is set to `true` if the main DB op succeeded but the follow-up statistics recalc failed — callers can then re-run `history_editor.recalculate_statistics` to fix the drift.
 
@@ -91,6 +95,12 @@ Ordering invariant in `update_statistics_after_state_change`: short-term periods
 The same invariant applies to `recalculate_statistics_sync` across the phase boundary: it commits + expires between the short-term and long-term loops, and chunks commits inside each loop (`RECALC_CHUNK_SHORT_TERM = 288`, `RECALC_CHUNK_LONG_TERM = 24`) to bound the recorder write-lock duration on bulk recalcs.
 
 `recalculate_statistics` only **updates existing** statistics rows — it never inserts new ones. HA's recorder is still responsible for creating rows on its normal schedule.
+
+### Bulk operations and the dedupe-cascade pattern
+
+Bulk paths (`_bulk_update_record_sync`, `_bulk_delete_record_sync`, `bulk_update_statistic_sync`, `bulk_delete_statistic_sync`) collect every affected `(metadata_id, 5-min start)` and `(metadata_id, hour start)` pair across the whole batch into per-metadata sets, then call `update_statistics_for_periods` (in `statistics.py`) **once** at the end. This avoids redundant per-row recalc when many rows in the batch share affected periods. The same cross-phase ordering invariant applies: short-term first in chronological order, then `flush()`+`expire_all()`, then long-term.
+
+Source-data guards on the bulk-stats paths are evaluated **per row, not per batch** — blocked rows are reported in the `blocked: [{id, reason}]` list and the rest of the batch proceeds. Same for missing rows (`not_found`). Bulk endpoints never abort the batch on individual row issues; only catastrophic errors (DB unavailable, etc.) return `success: False`.
 
 ### Frontend
 

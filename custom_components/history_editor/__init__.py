@@ -30,12 +30,15 @@ except ImportError:
 from .panel import async_register_panel
 from .statistics import (
     HAS_STATISTICS,
+    bulk_delete_statistic_sync,
+    bulk_update_statistic_sync,
     delete_short_term_stats_by_state_id,
     delete_statistic_sync,
     get_statistics_sync,
     recalculate_statistics_sync,
     update_statistic_sync,
     update_statistics_after_state_change,
+    update_statistics_for_periods,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +51,10 @@ SERVICE_UPDATE_RECORD = "update_record"
 SERVICE_DELETE_RECORD = "delete_record"
 SERVICE_CREATE_RECORD = "create_record"
 SERVICE_RECALCULATE_STATISTICS = "recalculate_statistics"
+SERVICE_BULK_UPDATE_RECORD = "bulk_update_record"
+SERVICE_BULK_DELETE_RECORD = "bulk_delete_record"
+SERVICE_BULK_UPDATE_STATISTIC = "bulk_update_statistic"
+SERVICE_BULK_DELETE_STATISTIC = "bulk_delete_statistic"
 
 
 def _set_state_timestamps(
@@ -126,6 +133,33 @@ SERVICE_RECALCULATE_STATISTICS_SCHEMA = vol.Schema({
     vol.Required("start_time"): cv.datetime,
     vol.Required("end_time"): cv.datetime,
     vol.Optional("statistic_type", default="both"): vol.In(["short_term", "long_term", "both"]),
+})
+
+SERVICE_BULK_UPDATE_RECORD_SCHEMA = vol.Schema({
+    vol.Required("state_ids"): vol.All(cv.ensure_list, [cv.positive_int], vol.Length(min=1)),
+    vol.Optional("state"): cv.string,
+    vol.Optional("attributes"): dict,
+    vol.Optional("last_changed"): cv.datetime,
+    vol.Optional("last_updated"): cv.datetime,
+})
+
+SERVICE_BULK_DELETE_RECORD_SCHEMA = vol.Schema({
+    vol.Required("state_ids"): vol.All(cv.ensure_list, [cv.positive_int], vol.Length(min=1)),
+})
+
+SERVICE_BULK_UPDATE_STATISTIC_SCHEMA = vol.Schema({
+    vol.Required("ids"): vol.All(cv.ensure_list, [cv.positive_int], vol.Length(min=1)),
+    vol.Optional("statistic_type", default="long_term"): vol.In(["short_term", "long_term"]),
+    vol.Optional("mean"): vol.Coerce(float),
+    vol.Optional("min"): vol.Coerce(float),
+    vol.Optional("max"): vol.Coerce(float),
+    vol.Optional("sum"): vol.Coerce(float),
+    vol.Optional("state"): vol.Coerce(float),
+})
+
+SERVICE_BULK_DELETE_STATISTIC_SCHEMA = vol.Schema({
+    vol.Required("ids"): vol.All(cv.ensure_list, [cv.positive_int], vol.Length(min=1)),
+    vol.Optional("statistic_type", default="long_term"): vol.In(["short_term", "long_term"]),
 })
 
 
@@ -626,6 +660,202 @@ class DeleteStatisticView(HomeAssistantView):
             )
 
 
+def _parse_id_list(raw, field: str) -> tuple[list[int] | None, str | None]:
+    """Coerce a JSON request payload's id-list field into ``list[int]``.
+
+    Returns ``(ids, None)`` on success or ``(None, error_message)`` on
+    failure.  Accepts a non-empty list of values that can be coerced to int.
+    """
+    if raw is None:
+        return None, f"{field} is required"
+    if not isinstance(raw, list) or not raw:
+        return None, f"{field} must be a non-empty list of integers"
+    try:
+        return [int(v) for v in raw], None
+    except (ValueError, TypeError):
+        return None, f"{field} must be a non-empty list of integers"
+
+
+class BulkUpdateRecordView(HomeAssistantView):
+    """View to update many state history records with the same overrides."""
+
+    url = "/api/history_editor/bulk_update"
+    name = "api:history_editor:bulk_update"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+
+            state_ids, err = _parse_id_list(data.get("state_ids"), "state_ids")
+            if err is not None:
+                return self.json({"success": False, "error": err}, status_code=400)
+
+            new_state = data.get("state")
+            if new_state is not None:
+                new_state = str(new_state)
+            new_attributes = data.get("attributes")
+
+            new_last_changed = None
+            new_last_updated = None
+            if data.get("last_changed"):
+                try:
+                    new_last_changed = dt_util.parse_datetime(data["last_changed"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_changed format"},
+                        status_code=400,
+                    )
+            if data.get("last_updated"):
+                try:
+                    new_last_updated = dt_util.parse_datetime(data["last_updated"])
+                except (ValueError, TypeError):
+                    return self.json(
+                        {"success": False, "error": "Invalid last_updated format"},
+                        status_code=400,
+                    )
+
+            result = await self.hass.async_add_executor_job(
+                _bulk_update_record_sync,
+                self.hass,
+                state_ids,
+                new_state,
+                new_attributes,
+                new_last_changed,
+                new_last_updated,
+            )
+
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in BulkUpdateRecordView: %s", err)
+            return self.json({"success": False, "error": str(err)}, status_code=500)
+
+
+class BulkDeleteRecordView(HomeAssistantView):
+    """View to delete many state history records in one transaction."""
+
+    url = "/api/history_editor/bulk_delete"
+    name = "api:history_editor:bulk_delete"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+
+            state_ids, err = _parse_id_list(data.get("state_ids"), "state_ids")
+            if err is not None:
+                return self.json({"success": False, "error": err}, status_code=400)
+
+            result = await self.hass.async_add_executor_job(
+                _bulk_delete_record_sync, self.hass, state_ids,
+            )
+
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in BulkDeleteRecordView: %s", err)
+            return self.json({"success": False, "error": str(err)}, status_code=500)
+
+
+class BulkUpdateStatisticView(HomeAssistantView):
+    """View to update many statistics records (short or long-term) at once."""
+
+    url = "/api/history_editor/statistics/bulk_update"
+    name = "api:history_editor:statistics:bulk_update"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+
+            ids, err = _parse_id_list(data.get("ids"), "ids")
+            if err is not None:
+                return self.json({"success": False, "error": err}, status_code=400)
+
+            statistic_type = data.get("statistic_type", "long_term")
+            if statistic_type not in ("long_term", "short_term"):
+                return self.json(
+                    {"success": False, "error": "statistic_type must be 'long_term' or 'short_term'"},
+                    status_code=400,
+                )
+
+            result = await self.hass.async_add_executor_job(
+                bulk_update_statistic_sync,
+                self.hass,
+                ids,
+                data.get("mean"),
+                data.get("min"),
+                data.get("max"),
+                data.get("sum"),
+                data.get("state"),
+                statistic_type,
+            )
+
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in BulkUpdateStatisticView: %s", err)
+            return self.json({"success": False, "error": str(err)}, status_code=500)
+
+
+class BulkDeleteStatisticView(HomeAssistantView):
+    """View to delete many statistics records (short or long-term) at once."""
+
+    url = "/api/history_editor/statistics/bulk_delete"
+    name = "api:history_editor:statistics:bulk_delete"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant):
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+
+            ids, err = _parse_id_list(data.get("ids"), "ids")
+            if err is not None:
+                return self.json({"success": False, "error": err}, status_code=400)
+
+            statistic_type = data.get("statistic_type", "long_term")
+            if statistic_type not in ("long_term", "short_term"):
+                return self.json(
+                    {"success": False, "error": "statistic_type must be 'long_term' or 'short_term'"},
+                    status_code=400,
+                )
+
+            result = await self.hass.async_add_executor_job(
+                bulk_delete_statistic_sync, self.hass, ids, statistic_type,
+            )
+
+            if result.get("success"):
+                _fire_statistics_events(self.hass)
+
+            return self.json(result)
+
+        except Exception as err:
+            _LOGGER.error("Error in BulkDeleteStatisticView: %s", err)
+            return self.json({"success": False, "error": str(err)}, status_code=500)
+
+
 
 def _get_records_sync(
     hass: HomeAssistant,
@@ -745,6 +975,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(GetStatisticsView(hass))
     hass.http.register_view(UpdateStatisticView(hass))
     hass.http.register_view(DeleteStatisticView(hass))
+    hass.http.register_view(BulkUpdateRecordView(hass))
+    hass.http.register_view(BulkDeleteRecordView(hass))
+    hass.http.register_view(BulkUpdateStatisticView(hass))
+    hass.http.register_view(BulkDeleteStatisticView(hass))
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
@@ -823,6 +1057,63 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         _fire_statistics_events(hass)
         return result
 
+    async def bulk_update_record(call: ServiceCall) -> ServiceResponse:
+        """Apply the same field overrides to multiple state history records."""
+        result = await hass.async_add_executor_job(
+            _bulk_update_record_sync,
+            hass,
+            call.data["state_ids"],
+            call.data.get("state"),
+            call.data.get("attributes"),
+            call.data.get("last_changed"),
+            call.data.get("last_updated"),
+        )
+        if not result.get("success"):
+            raise HomeAssistantError(result.get("error") or "Failed to bulk-update records")
+        _fire_statistics_events(hass)
+        return result
+
+    async def bulk_delete_record(call: ServiceCall) -> ServiceResponse:
+        """Delete multiple state history records in one transaction."""
+        result = await hass.async_add_executor_job(
+            _bulk_delete_record_sync, hass, call.data["state_ids"],
+        )
+        if not result.get("success"):
+            raise HomeAssistantError(result.get("error") or "Failed to bulk-delete records")
+        _fire_statistics_events(hass)
+        return result
+
+    async def bulk_update_statistic(call: ServiceCall) -> ServiceResponse:
+        """Apply the same column overrides to multiple statistics rows."""
+        result = await hass.async_add_executor_job(
+            bulk_update_statistic_sync,
+            hass,
+            call.data["ids"],
+            call.data.get("mean"),
+            call.data.get("min"),
+            call.data.get("max"),
+            call.data.get("sum"),
+            call.data.get("state"),
+            call.data.get("statistic_type", "long_term"),
+        )
+        if not result.get("success"):
+            raise HomeAssistantError(result.get("error") or "Failed to bulk-update statistics")
+        _fire_statistics_events(hass)
+        return result
+
+    async def bulk_delete_statistic(call: ServiceCall) -> ServiceResponse:
+        """Delete multiple statistics rows in one transaction."""
+        result = await hass.async_add_executor_job(
+            bulk_delete_statistic_sync,
+            hass,
+            call.data["ids"],
+            call.data.get("statistic_type", "long_term"),
+        )
+        if not result.get("success"):
+            raise HomeAssistantError(result.get("error") or "Failed to bulk-delete statistics")
+        _fire_statistics_events(hass)
+        return result
+
     # Register services
     hass.services.async_register(
         DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
@@ -840,6 +1131,26 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.services.async_register(
         DOMAIN, SERVICE_RECALCULATE_STATISTICS, recalculate_statistics,
         schema=SERVICE_RECALCULATE_STATISTICS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_BULK_UPDATE_RECORD, bulk_update_record,
+        schema=SERVICE_BULK_UPDATE_RECORD_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_BULK_DELETE_RECORD, bulk_delete_record,
+        schema=SERVICE_BULK_DELETE_RECORD_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_BULK_UPDATE_STATISTIC, bulk_update_statistic,
+        schema=SERVICE_BULK_UPDATE_STATISTIC_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_BULK_DELETE_STATISTIC, bulk_delete_statistic,
+        schema=SERVICE_BULK_DELETE_STATISTIC_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 
@@ -1105,5 +1416,207 @@ def _create_record_sync(
             }
     except Exception as err:
         _LOGGER.error("Error creating record: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def _bulk_update_record_sync(
+    hass: HomeAssistant,
+    state_ids: list[int],
+    new_state: str | None,
+    new_attributes: dict | None,
+    new_last_changed: datetime | None,
+    new_last_updated: datetime | None,
+) -> dict[str, Any]:
+    """Apply the same field overrides to multiple state history records.
+
+    For statistics consistency, every affected (metadata_id, 5-min period)
+    and (metadata_id, hour) pair is collected across the whole batch and the
+    cascade is invoked once via ``update_statistics_for_periods`` — far more
+    efficient than running a single-row recalc per state.
+
+    Returns ``{success, updated_count, not_found, statistics_stale}``.
+    """
+    if not state_ids:
+        return {"success": False, "error": "state_ids must be a non-empty list"}
+    if all(v is None for v in (new_state, new_attributes, new_last_changed, new_last_updated)):
+        return {"success": False, "error": "no fields to update"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            updated_count = 0
+            not_found: list[int] = []
+            # Per-metadata_id, the unique 5-min and hour starts that need
+            # statistics recalculation after this batch (deduped).
+            affected_5min: dict[int, set[float]] = {}
+            affected_hour: dict[int, set[float]] = {}
+
+            for state_id in state_ids:
+                state = session.query(States).filter(States.state_id == state_id).first()
+                if state is None:
+                    not_found.append(state_id)
+                    continue
+
+                old_ts = None
+                if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                    old_ts = state.last_updated_ts
+
+                if new_state is not None:
+                    state.state = new_state
+                if new_attributes is not None:
+                    state.attributes = json.dumps(new_attributes)
+                _set_state_timestamps(state, new_last_changed, new_last_updated)
+                updated_count += 1
+
+                metadata_id = state.metadata_id
+                if old_ts is not None:
+                    affected_5min.setdefault(metadata_id, set()).add(
+                        float(int(old_ts // 300) * 300)
+                    )
+                    affected_hour.setdefault(metadata_id, set()).add(
+                        float(int(old_ts // 3600) * 3600)
+                    )
+                new_ts = None
+                if new_last_updated is not None:
+                    new_ts = new_last_updated.timestamp()
+                elif old_ts is not None:
+                    new_ts = old_ts
+                if new_ts is not None:
+                    affected_5min.setdefault(metadata_id, set()).add(
+                        float(int(new_ts // 300) * 300)
+                    )
+                    affected_hour.setdefault(metadata_id, set()).add(
+                        float(int(new_ts // 3600) * 3600)
+                    )
+
+            session.commit()
+
+            # Cascade once for the entire batch
+            statistics_stale = False
+            if HAS_STATISTICS and updated_count > 0 and (
+                new_state is not None or new_last_updated is not None
+            ):
+                try:
+                    update_statistics_for_periods(session, affected_5min, affected_hour)
+                    session.commit()
+                except Exception as stats_err:
+                    statistics_stale = True
+                    _LOGGER.warning(
+                        "Error updating statistics after bulk state update "
+                        "(batch of %d): %s — call history_editor.recalculate_statistics to fix",
+                        updated_count, stats_err,
+                    )
+
+            _LOGGER.info(
+                "Bulk-updated %d state records; %d not found",
+                updated_count, len(not_found),
+            )
+            return {
+                "success": True,
+                "updated_count": updated_count,
+                "not_found": not_found,
+                "statistics_stale": statistics_stale,
+            }
+    except Exception as err:
+        _LOGGER.error("Error in bulk_update_record: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def _bulk_delete_record_sync(
+    hass: HomeAssistant,
+    state_ids: list[int],
+) -> dict[str, Any]:
+    """Delete multiple state history records in one transaction.
+
+    Cascades:
+      - Clears ``old_state_id`` self-references on other states (per-row).
+      - Drops linked short-term stats via the FK column when present
+        (older HA schemas).
+      - Recalculates statistics for every affected (5-min, hour) period
+        once at the end via ``update_statistics_for_periods``.
+
+    Returns ``{success, deleted_count, not_found, statistics_stale}``.
+    """
+    if not state_ids:
+        return {"success": False, "error": "state_ids must be a non-empty list"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    try:
+        with recorder.get_session() as session:
+            deleted_count = 0
+            not_found: list[int] = []
+            affected_5min: dict[int, set[float]] = {}
+            affected_hour: dict[int, set[float]] = {}
+
+            for state_id in state_ids:
+                state = session.query(States).filter(States.state_id == state_id).first()
+                if state is None:
+                    not_found.append(state_id)
+                    continue
+
+                metadata_id = state.metadata_id
+                if hasattr(state, 'last_updated_ts') and state.last_updated_ts is not None:
+                    ts = state.last_updated_ts
+                    affected_5min.setdefault(metadata_id, set()).add(
+                        float(int(ts // 300) * 300)
+                    )
+                    affected_hour.setdefault(metadata_id, set()).add(
+                        float(int(ts // 3600) * 3600)
+                    )
+
+                # Null out old_state_id references (self-FK) before delete
+                try:
+                    session.query(States).filter(
+                        States.old_state_id == state_id
+                    ).update({"old_state_id": None}, synchronize_session=False)
+                except AttributeError:
+                    pass
+
+                # Drop linked short-term stats (legacy schema only)
+                try:
+                    delete_short_term_stats_by_state_id(session, state_id)
+                except Exception as stats_err:
+                    _LOGGER.warning(
+                        "Error deleting linked statistics for state %s: %s",
+                        state_id, stats_err,
+                    )
+
+                session.delete(state)
+                deleted_count += 1
+
+            session.commit()
+
+            # Cascade stats once for the entire batch
+            statistics_stale = False
+            if HAS_STATISTICS and deleted_count > 0:
+                try:
+                    update_statistics_for_periods(session, affected_5min, affected_hour)
+                    session.commit()
+                except Exception as stats_err:
+                    statistics_stale = True
+                    _LOGGER.warning(
+                        "Error updating statistics after bulk state delete "
+                        "(batch of %d): %s — call history_editor.recalculate_statistics to fix",
+                        deleted_count, stats_err,
+                    )
+
+            _LOGGER.info(
+                "Bulk-deleted %d state records; %d not found",
+                deleted_count, len(not_found),
+            )
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "not_found": not_found,
+                "statistics_stale": statistics_stale,
+            }
+    except Exception as err:
+        _LOGGER.error("Error in bulk_delete_record: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}
 

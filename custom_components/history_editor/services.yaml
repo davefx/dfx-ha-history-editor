@@ -157,3 +157,153 @@ recalculate_statistics:
             - both
             - short_term
             - long_term
+
+bulk_update_record:
+  name: Bulk Update History Records
+  description: >
+    Apply the same field overrides (state, attributes, timestamps) to multiple
+    state history records in a single transaction. Affected statistics periods
+    are recalculated once at the end of the batch.
+  response:
+    required: true
+  fields:
+    state_ids:
+      name: State IDs
+      description: List of state record IDs to update.
+      required: true
+      selector:
+        object:
+    state:
+      name: State
+      description: New state value (applied to every selected record).
+      required: false
+      selector:
+        text:
+    attributes:
+      name: Attributes
+      description: New attributes as JSON object (replaces existing on every selected record).
+      required: false
+      selector:
+        object:
+    last_changed:
+      name: Last Changed
+      description: New last_changed timestamp (applied to every selected record).
+      required: false
+      selector:
+        datetime:
+    last_updated:
+      name: Last Updated
+      description: New last_updated timestamp (applied to every selected record).
+      required: false
+      selector:
+        datetime:
+
+bulk_delete_record:
+  name: Bulk Delete History Records
+  description: >
+    Delete multiple state history records in a single transaction. Affected
+    statistics periods are recalculated once at the end of the batch.
+  response:
+    required: true
+  fields:
+    state_ids:
+      name: State IDs
+      description: List of state record IDs to delete.
+      required: true
+      selector:
+        object:
+
+bulk_update_statistic:
+  name: Bulk Update Statistics
+  description: >
+    Apply the same column overrides to multiple statistics rows. Each row is
+    independently checked against the source-data guard; rows that have
+    underlying state history (short-term) or underlying short-term rows
+    (long-term) are reported as blocked and skipped without aborting the batch.
+  response:
+    required: true
+  fields:
+    ids:
+      name: Statistic IDs
+      description: List of statistics row IDs to update.
+      required: true
+      selector:
+        object:
+    statistic_type:
+      name: Statistic Type
+      description: Which table the IDs refer to. Defaults to 'long_term'.
+      required: false
+      default: long_term
+      selector:
+        select:
+          options:
+            - long_term
+            - short_term
+    mean:
+      name: Mean
+      description: New mean value (applied to every selected row).
+      required: false
+      selector:
+        number:
+          mode: box
+          step: any
+    min:
+      name: Min
+      description: New minimum value.
+      required: false
+      selector:
+        number:
+          mode: box
+          step: any
+    max:
+      name: Max
+      description: New maximum value.
+      required: false
+      selector:
+        number:
+          mode: box
+          step: any
+    sum:
+      name: Sum
+      description: >
+        New running-total value. For totaliser sensors, setting this uniformly
+        across rows breaks the running-total invariant; consider single-row edits
+        with the sum cascade instead.
+      required: false
+      selector:
+        number:
+          mode: box
+          step: any
+    state:
+      name: State
+      description: New last-known state value.
+      required: false
+      selector:
+        number:
+          mode: box
+          step: any
+
+bulk_delete_statistic:
+  name: Bulk Delete Statistics
+  description: >
+    Delete multiple statistics rows in a single transaction. Source-data
+    guards apply per row; blocked rows are reported and skipped.
+  response:
+    required: true
+  fields:
+    ids:
+      name: Statistic IDs
+      description: List of statistics row IDs to delete.
+      required: true
+      selector:
+        object:
+    statistic_type:
+      name: Statistic Type
+      description: Which table the IDs refer to. Defaults to 'long_term'.
+      required: false
+      default: long_term
+      selector:
+        select:
+          options:
+            - long_term
+            - short_term

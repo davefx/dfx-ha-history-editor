@@ -306,6 +306,57 @@ def recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float)
     return True
 
 
+def update_statistics_for_periods(
+    session,
+    metadata_to_5min: dict[int, set[float]],
+    metadata_to_hour: dict[int, set[float]],
+) -> tuple[int, int]:
+    """Recalculate short-term and long-term stats for a batch of affected
+    periods.  Used by the bulk state-mutation paths to dedupe per-period
+    work — collect every affected (metadata_id, 5-min start) and
+    (metadata_id, hour start) across the whole batch, then call this once.
+
+    Honours the cross-phase ordering invariant: short-term periods are
+    processed in chronological order (so sum cascades compound), then the
+    session is flushed + expired, then long-term periods are processed.
+
+    Returns ``(short_term_updated, long_term_updated)``.  Silently no-ops
+    when the statistics schema is unavailable.
+    """
+    if not HAS_STATISTICS:
+        return 0, 0
+
+    short_updated = 0
+    long_updated = 0
+
+    for metadata_id, periods_5min in metadata_to_5min.items():
+        meta = session.query(StatesMeta).filter(
+            StatesMeta.metadata_id == metadata_id
+        ).first()
+        if meta is None:
+            continue
+        stat_meta = session.query(StatisticsMeta).filter(
+            StatisticsMeta.statistic_id == meta.entity_id
+        ).first()
+        if stat_meta is None:
+            continue
+        stat_meta_id = stat_meta.id
+
+        for ts in sorted(periods_5min):
+            if recalculate_short_term_stat(session, stat_meta_id, meta.entity_id, ts):
+                short_updated += 1
+
+        # Phase boundary: flush + expire before long-term reads cached short-term sums.
+        session.flush()
+        session.expire_all()
+
+        for ts in metadata_to_hour.get(metadata_id, set()):
+            if recalculate_long_term_stat(session, stat_meta_id, ts):
+                long_updated += 1
+
+    return short_updated, long_updated
+
+
 def update_statistics_after_state_change(
     session,
     state_record,
@@ -700,6 +751,252 @@ def delete_statistic_sync(
                 return {"success": False, "error": f"Statistic ID {stat_id} not found"}
     except Exception as err:
         _LOGGER.error("Error deleting statistic: %s", err)
+        return {"success": False, "error": str(err)}
+
+
+def _check_source_data_blocks_edit(
+    session, stat, statistic_type: str,
+) -> str | None:
+    """Return a human-readable error if direct edits/deletes of ``stat`` are
+    blocked by the presence of underlying source data, or ``None`` if the
+    operation is allowed.
+
+    For short-term rows: blocked when state history records exist in the same
+    5-minute period.  For long-term rows: blocked when short-term records
+    exist in the containing hour.  This mirrors the guards in the singular
+    update/delete helpers and is reused by the bulk variants.
+    """
+    if stat.start_ts is None:
+        return None
+
+    if statistic_type == "short_term":
+        stat_meta_row = session.query(StatisticsMeta).filter(
+            StatisticsMeta.id == stat.metadata_id
+        ).first()
+        if stat_meta_row is None:
+            return None
+        try:
+            state_count = (
+                session.query(States)
+                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+                .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
+                .filter(States.last_updated_ts >= stat.start_ts)
+                .filter(States.last_updated_ts < stat.start_ts + 300.0)
+                .count()
+            )
+        except Exception as check_err:
+            _LOGGER.warning("Source-data check failed for short-term stat %s: %s", stat.id, check_err)
+            return None
+        if state_count > 0:
+            return (
+                "state history records exist for this 5-minute period; edit "
+                "the state history instead, or wait for the recorder to purge "
+                "(default: 10 days)"
+            )
+        return None
+
+    # long_term
+    try:
+        short_term_count = (
+            session.query(StatisticsShortTerm)
+            .filter(StatisticsShortTerm.metadata_id == stat.metadata_id)
+            .filter(StatisticsShortTerm.start_ts >= stat.start_ts)
+            .filter(StatisticsShortTerm.start_ts < stat.start_ts + 3600.0)
+            .count()
+        )
+    except Exception as check_err:
+        _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat.id, check_err)
+        return None
+    if short_term_count > 0:
+        return (
+            "short-term statistics records exist for this hour; edit the "
+            "short-term statistics instead, or wait for the recorder to purge "
+            "(default: 10 days)"
+        )
+    return None
+
+
+def bulk_update_statistic_sync(
+    hass: HomeAssistant,
+    ids: list[int],
+    mean: float | None,
+    min_val: float | None,
+    max_val: float | None,
+    sum_val: float | None,
+    state: float | None,
+    statistic_type: str = "long_term",
+) -> dict[str, Any]:
+    """Apply the same column overrides to multiple statistics rows.
+
+    Each row is independently subjected to the source-data guard.  Rows that
+    are blocked or missing are reported in the result but do not abort the
+    rest of the batch.  For short-term updates, the long-term cascade runs
+    once per affected hour at the end (deduplicated) instead of per-row.
+
+    Returns a dict with:
+      - ``success``: True unless an unrecoverable error occurred
+      - ``updated_count``: number of rows successfully updated
+      - ``blocked``: list of ``{id, reason}`` for rows blocked by guards
+      - ``not_found``: list of ids that did not match any row
+    """
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+    if not ids:
+        return {"success": False, "error": "ids must be a non-empty list"}
+    if all(v is None for v in (mean, min_val, max_val, sum_val, state)):
+        return {"success": False, "error": "no fields to update"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
+
+    try:
+        with recorder.get_session() as session:
+            updated_count = 0
+            blocked: list[dict[str, Any]] = []
+            not_found: list[int] = []
+            # Per-metadata_id, the set of hour starts that need long-term
+            # recalculation after this batch.  Only used for short-term updates.
+            affected_hours: dict[int, set[float]] = {}
+
+            for stat_id in ids:
+                stat = session.query(table).filter(table.id == stat_id).first()
+                if stat is None:
+                    not_found.append(stat_id)
+                    continue
+
+                guard_reason = _check_source_data_blocks_edit(
+                    session, stat, statistic_type,
+                )
+                if guard_reason is not None:
+                    blocked.append({"id": stat_id, "reason": guard_reason})
+                    continue
+
+                if mean is not None:
+                    stat.mean = float(mean)
+                if min_val is not None:
+                    stat.min = float(min_val)
+                if max_val is not None:
+                    stat.max = float(max_val)
+                if sum_val is not None:
+                    stat.sum = float(sum_val)
+                if state is not None:
+                    stat.state = float(state)
+                updated_count += 1
+
+                if statistic_type == "short_term" and stat.start_ts is not None:
+                    hour_start = float(int(stat.start_ts // 3600) * 3600)
+                    affected_hours.setdefault(stat.metadata_id, set()).add(hour_start)
+
+            session.flush()
+
+            # Cascade: re-aggregate long-term rows for every affected hour.
+            # Done once per hour (not per short-term row) to avoid redundant work.
+            if statistic_type == "short_term" and affected_hours:
+                for metadata_id, hours in affected_hours.items():
+                    for hour in hours:
+                        try:
+                            recalculate_long_term_stat(session, metadata_id, hour)
+                        except Exception as cascade_err:
+                            _LOGGER.warning(
+                                "Error updating long-term stat after bulk short-term "
+                                "edit (metadata_id=%s, hour=%s): %s",
+                                metadata_id, hour, cascade_err,
+                            )
+
+            session.commit()
+            _LOGGER.info(
+                "Bulk-updated %d statistics rows (type=%s); %d blocked, %d not found",
+                updated_count, statistic_type, len(blocked), len(not_found),
+            )
+            return {
+                "success": True,
+                "updated_count": updated_count,
+                "blocked": blocked,
+                "not_found": not_found,
+            }
+    except Exception as err:
+        _LOGGER.error("Error in bulk_update_statistic: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def bulk_delete_statistic_sync(
+    hass: HomeAssistant,
+    ids: list[int],
+    statistic_type: str = "long_term",
+) -> dict[str, Any]:
+    """Delete multiple statistics rows in one transaction.
+
+    Same guard / reporting semantics as ``bulk_update_statistic_sync``.  For
+    short-term deletions, the long-term cascade runs once per affected hour.
+    """
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+    if not ids:
+        return {"success": False, "error": "ids must be a non-empty list"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    table = StatisticsShortTerm if statistic_type == "short_term" else Statistics
+
+    try:
+        with recorder.get_session() as session:
+            deleted_count = 0
+            blocked: list[dict[str, Any]] = []
+            not_found: list[int] = []
+            affected_hours: dict[int, set[float]] = {}
+
+            for stat_id in ids:
+                stat = session.query(table).filter(table.id == stat_id).first()
+                if stat is None:
+                    not_found.append(stat_id)
+                    continue
+
+                guard_reason = _check_source_data_blocks_edit(
+                    session, stat, statistic_type,
+                )
+                if guard_reason is not None:
+                    blocked.append({"id": stat_id, "reason": guard_reason})
+                    continue
+
+                if statistic_type == "short_term" and stat.start_ts is not None:
+                    hour_start = float(int(stat.start_ts // 3600) * 3600)
+                    affected_hours.setdefault(stat.metadata_id, set()).add(hour_start)
+
+                session.delete(stat)
+                deleted_count += 1
+
+            session.flush()
+
+            if statistic_type == "short_term" and affected_hours:
+                for metadata_id, hours in affected_hours.items():
+                    for hour in hours:
+                        try:
+                            recalculate_long_term_stat(session, metadata_id, hour)
+                        except Exception as cascade_err:
+                            _LOGGER.warning(
+                                "Error updating long-term stat after bulk short-term "
+                                "delete (metadata_id=%s, hour=%s): %s",
+                                metadata_id, hour, cascade_err,
+                            )
+
+            session.commit()
+            _LOGGER.info(
+                "Bulk-deleted %d statistics rows (type=%s); %d blocked, %d not found",
+                deleted_count, statistic_type, len(blocked), len(not_found),
+            )
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "blocked": blocked,
+                "not_found": not_found,
+            }
+    except Exception as err:
+        _LOGGER.error("Error in bulk_delete_statistic: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}
 
 

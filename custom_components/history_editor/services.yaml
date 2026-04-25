@@ -204,7 +204,6 @@ bulk_delete_record:
     Delete multiple state history records in a single transaction. Affected
     statistics periods are recalculated once at the end of the batch.
   response:
-    required: true
   fields:
     state_ids:
       name: State IDs

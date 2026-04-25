@@ -373,3 +373,107 @@ class TestDeleteStatisticSync:
         db_session.expire_all()
         # With no prior short-term, the long-term row is removed by the fallback
         assert db_session.get(Statistics, long_id) is None
+
+    def test_delete_one_short_term_with_siblings_recomputes_long_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Deleting a *wrong* short-term row when other short-term rows in the
+        same hour remain → long-term re-aggregates from the surviving rows.
+
+        This is the user-facing flow: 'I see a bad spike in 5-min stats; I
+        delete that one row; the hourly graph should now ignore it'.
+        """
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        # Four short-term rows in this hour: 10, 999 (the wrong one), 30, 40
+        good_a = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=10.0, min=10.0, max=10.0, state=10.0,
+        )
+        bad = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300,
+            mean=999.0, min=999.0, max=999.0, state=999.0,
+        )
+        good_b = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 600,
+            mean=30.0, min=30.0, max=30.0, state=30.0,
+        )
+        good_c = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 900,
+            mean=40.0, min=40.0, max=40.0, state=40.0,
+        )
+        # Long-term reflects the average of all four — including the bad value
+        long_row = _add_long_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=(10.0 + 999.0 + 30.0 + 40.0) / 4,
+            min=10.0, max=999.0, state=40.0,
+        )
+        good_a_id, bad_id, good_b_id, good_c_id, long_id = (
+            good_a.id, bad.id, good_b.id, good_c.id, long_row.id,
+        )
+
+        result = delete_statistic_sync(
+            mock_hass, bad_id, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        db_session.expire_all()
+        # Only the bad row removed; siblings untouched
+        assert db_session.get(StatisticsShortTerm, bad_id) is None
+        assert db_session.get(StatisticsShortTerm, good_a_id) is not None
+        assert db_session.get(StatisticsShortTerm, good_b_id) is not None
+        assert db_session.get(StatisticsShortTerm, good_c_id) is not None
+        # Long-term re-aggregated from the surviving 3 rows
+        reloaded_long = db_session.get(Statistics, long_id)
+        assert reloaded_long is not None
+        assert reloaded_long.mean == pytest.approx((10.0 + 30.0 + 40.0) / 3)
+        assert reloaded_long.min == 10.0
+        assert reloaded_long.max == 40.0
+        # state = last surviving short-term's state
+        assert reloaded_long.state == 40.0
+
+    def test_update_one_short_term_with_siblings_recomputes_long_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Editing one of several short-term rows in an hour should re-aggregate
+        the long-term row from all of them, not just the edited one."""
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        # Three short-term rows in this hour, average 20.0
+        a = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=10.0, min=10.0, max=10.0, state=10.0,
+        )
+        b = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300,
+            mean=20.0, min=20.0, max=20.0, state=20.0,
+        )
+        c = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 600,
+            mean=30.0, min=30.0, max=30.0, state=30.0,
+        )
+        long_row = _add_long_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=20.0, min=10.0, max=30.0, state=30.0,
+        )
+        a_id, b_id, c_id, long_id = a.id, b.id, c.id, long_row.id
+
+        # Bump the middle one from 20 → 200
+        result = update_statistic_sync(
+            mock_hass, b_id,
+            mean=200.0, min_val=200.0, max_val=200.0, sum_val=None, state=200.0,
+            start=None, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        db_session.expire_all()
+        # Siblings untouched
+        assert db_session.get(StatisticsShortTerm, a_id).state == 10.0
+        assert db_session.get(StatisticsShortTerm, c_id).state == 30.0
+        # Long-term re-aggregated from all three: average is now (10 + 200 + 30)/3
+        reloaded_long = db_session.get(Statistics, long_id)
+        assert reloaded_long.mean == pytest.approx((10.0 + 200.0 + 30.0) / 3)
+        assert reloaded_long.min == 10.0
+        assert reloaded_long.max == 200.0
+        # state = last-by-start_ts short-term: c at hour_start+600, value 30.0
+        assert reloaded_long.state == 30.0

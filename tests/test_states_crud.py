@@ -379,3 +379,291 @@ class TestCreateRecordSync:
 
         assert "statistics_stale" in result
         assert result["statistics_stale"] is False
+
+
+# --------------------------------------------------------------------------
+# End-to-end: deleting a state should recalculate the statistics that
+# depended on it (regression for the cascade behaviour, not just the FK
+# delete which is a no-op on modern HA).
+# --------------------------------------------------------------------------
+
+
+def _five_min_aligned(ts: float) -> float:
+    return float(int(ts // 300) * 300)
+
+
+def _hour_aligned(ts: float) -> float:
+    return float(int(ts // 3600) * 3600)
+
+
+class TestDeleteStateAffectsStatistics:
+    """End-to-end checks that ``_delete_record_sync`` invokes
+    ``update_statistics_after_state_change`` so short-term and long-term
+    rows reflect the missing state, not just the freed FK link."""
+
+    def test_only_state_in_period_short_term_row_removed_when_no_prior(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Sole state in a 5-min bucket with no prior numeric → short-term
+        row is removed (nothing left to summarise, nothing to carry forward)."""
+        states_meta_id, stat_meta_id, _ = sample_entity
+        ts = 1_700_000_000.0
+        period = _five_min_aligned(ts)
+        s = _add_state(db_session, states_meta_id, ts, "5.0")
+        state_id = s.state_id
+        short_id = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=period,
+            mean=5.0, min=5.0, max=5.0, state=5.0,
+        )
+        db_session.add(short_id)
+        db_session.flush()
+        short_row_id = short_id.id
+
+        result = _delete_record_sync(mock_hass, state_id)
+
+        assert result["success"] is True
+        db_session.expire_all()
+        assert db_session.get(States, state_id) is None
+        # Short-term row removed because no states remain and no prior value
+        assert db_session.get(StatisticsShortTerm, short_row_id) is None
+
+    def test_only_state_in_period_short_term_holds_last_prior_value(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """A prior state exists outside the bucket → after delete the
+        short-term row carries that prior value forward, not the deleted one."""
+        states_meta_id, stat_meta_id, _ = sample_entity
+        ts = 1_700_000_000.0
+        period = _five_min_aligned(ts)
+        # Prior state, BEFORE the affected bucket
+        _add_state(db_session, states_meta_id, period - 60, "2.0")
+        s = _add_state(db_session, states_meta_id, ts, "5.0")
+        state_id = s.state_id
+        short_row = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=period,
+            mean=5.0, min=5.0, max=5.0, state=5.0,
+        )
+        db_session.add(short_row)
+        db_session.flush()
+        short_id = short_row.id
+
+        result = _delete_record_sync(mock_hass, state_id)
+
+        assert result["success"] is True
+        db_session.expire_all()
+        reloaded = db_session.get(StatisticsShortTerm, short_id)
+        assert reloaded is not None
+        # All four columns should reflect the prior numeric value, not 5.0
+        assert reloaded.state == 2.0
+        assert reloaded.mean == 2.0
+        assert reloaded.min == 2.0
+        assert reloaded.max == 2.0
+
+    def test_other_states_in_period_short_term_row_recomputed(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Two states in the same 5-min bucket; deleting the higher one
+        should leave the short-term row reflecting only the surviving state."""
+        states_meta_id, stat_meta_id, _ = sample_entity
+        period = _five_min_aligned(1_700_000_000.0)
+        _add_state(db_session, states_meta_id, period + 30, "10.0")    # surviving
+        s_high = _add_state(db_session, states_meta_id, period + 120, "20.0")  # deleted
+        delete_id = s_high.state_id
+
+        short_row = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=period,
+            mean=15.0, min=10.0, max=20.0, state=20.0,
+        )
+        db_session.add(short_row)
+        db_session.flush()
+        short_id = short_row.id
+
+        result = _delete_record_sync(mock_hass, delete_id)
+
+        assert result["success"] is True
+        db_session.expire_all()
+        reloaded = db_session.get(StatisticsShortTerm, short_id)
+        assert reloaded is not None
+        # After deleting the 20.0, only 10.0 remains
+        assert reloaded.mean == 10.0
+        assert reloaded.min == 10.0
+        assert reloaded.max == 10.0
+        assert reloaded.state == 10.0
+
+    def test_long_term_row_recomputed_after_state_delete(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Hourly stat row aggregates short-term rows in its hour. After a
+        state delete, the affected short-term recomputes, then the hourly
+        recomputes from it."""
+        states_meta_id, stat_meta_id, _ = sample_entity
+        # Pin to an exact hour boundary so 5-min and hour periods align cleanly
+        hour_start = 3600.0 * 472_222  # arbitrary fixed hour
+        first_period = hour_start
+
+        # One surviving state, one deleted state, both in the same 5-min bucket
+        _add_state(db_session, states_meta_id, first_period + 30, "10.0")
+        s_doomed = _add_state(db_session, states_meta_id, first_period + 120, "30.0")
+        delete_id = s_doomed.state_id
+
+        # Short-term row for that bucket pre-recalc reflects both
+        short_row = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=first_period,
+            mean=20.0, min=10.0, max=30.0, state=30.0,
+        )
+        long_row = Statistics(
+            metadata_id=stat_meta_id, start_ts=hour_start,
+            mean=20.0, min=10.0, max=30.0, state=30.0,
+        )
+        db_session.add_all([short_row, long_row])
+        db_session.flush()
+        long_id = long_row.id
+
+        result = _delete_record_sync(mock_hass, delete_id)
+
+        assert result["success"] is True
+        db_session.expire_all()
+        reloaded_long = db_session.get(Statistics, long_id)
+        assert reloaded_long is not None
+        # Hourly aggregates the now-recomputed short-term: only 10.0 remains
+        assert reloaded_long.mean == 10.0
+        assert reloaded_long.min == 10.0
+        assert reloaded_long.max == 10.0
+        assert reloaded_long.state == 10.0
+
+    def test_totaliser_sum_cascades_forward_after_state_delete(
+        self, db_session, mock_hass, sample_totaliser,
+    ):
+        """Deleting a state in a totaliser should cascade the sum delta
+        through this period and all subsequent periods.  This is the
+        regression for the energy-dashboard bug class."""
+        states_meta_id, stat_meta_id, _ = sample_totaliser
+        first_period = _five_min_aligned(1_700_000_000.0)
+        next_period = first_period + 300.0
+        later_period = first_period + 600.0
+
+        # State sequence: 100.0 (kept) → 200.0 (deleted) inside the same bucket
+        _add_state(db_session, states_meta_id, first_period + 30, "100.0")
+        s_doomed = _add_state(db_session, states_meta_id, first_period + 120, "200.0")
+        delete_id = s_doomed.state_id
+
+        # Pre-existing short-term rows with a running sum reflecting the 200.0 endpoint
+        # Period 0: state=200, sum=200; later periods carry that forward
+        first = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=first_period,
+            state=200.0, sum=200.0,
+        )
+        nxt = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=next_period,
+            state=200.0, sum=200.0,
+        )
+        later = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=later_period,
+            state=200.0, sum=200.0,
+        )
+        db_session.add_all([first, nxt, later])
+        db_session.flush()
+        first_id, nxt_id, later_id = first.id, nxt.id, later.id
+
+        result = _delete_record_sync(mock_hass, delete_id)
+
+        assert result["success"] is True
+        db_session.expire_all()
+
+        # First period now ends at 100.0, so its state = 100.0; sum delta is -100
+        reloaded_first = db_session.get(StatisticsShortTerm, first_id)
+        assert reloaded_first.state == 100.0
+        assert reloaded_first.sum == 100.0
+
+        # Cascade: subsequent periods got -100 applied to their sum, but state
+        # is unchanged because no recalc ran for them
+        reloaded_nxt = db_session.get(StatisticsShortTerm, nxt_id)
+        assert reloaded_nxt.sum == 100.0
+        reloaded_later = db_session.get(StatisticsShortTerm, later_id)
+        assert reloaded_later.sum == 100.0
+
+    def test_create_then_delete_round_trips_statistics(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Create a state inside a stats-tracked period, then delete it.
+        The short-term row should end up as it was before the create
+        (or be removed if no prior data exists)."""
+        states_meta_id, stat_meta_id, entity_id = sample_entity
+        period = _five_min_aligned(1_700_000_000.0)
+        # Pre-existing short-term row with a known starting state
+        short = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=period,
+            mean=7.0, min=7.0, max=7.0, state=7.0,
+        )
+        db_session.add(short)
+        db_session.flush()
+        short_id = short.id
+        # Prior state so the period has a fallback when emptied
+        _add_state(db_session, states_meta_id, period - 60, "7.0")
+
+        # Create a state at period+60 with a different value
+        ts = datetime.fromtimestamp(period + 60, tz=timezone.utc)
+        create_result = _create_record_sync(mock_hass, entity_id, "99.0", {}, ts, ts)
+        assert create_result["success"] is True
+        new_state_id = create_result["state_id"]
+
+        # Delete it again
+        delete_result = _delete_record_sync(mock_hass, new_state_id)
+        assert delete_result["success"] is True
+
+        db_session.expire_all()
+        reloaded = db_session.get(StatisticsShortTerm, short_id)
+        # After create+delete, the short-term should reflect the prior 7.0,
+        # not the temporarily-created 99.0
+        assert reloaded is not None
+        assert reloaded.state == 7.0
+        assert reloaded.mean == 7.0
+
+    def test_edit_state_in_history_recomputes_both_short_and_long_term(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Editing the value of a state record should refresh both the
+        containing 5-min short-term row and the containing hourly long-term
+        row.  Mirror of the user request: 'if I edit a value in the history,
+        the short-term and long-term stats get affected'."""
+        states_meta_id, stat_meta_id, _ = sample_entity
+        # Pin to an exact hour boundary so 5-min and hour periods align cleanly
+        hour_start = 3600.0 * 472_222
+        period = hour_start  # first 5-min bucket of the hour
+        # Single state in the bucket, value 10.0
+        s = _add_state(db_session, states_meta_id, period + 60, "10.0")
+        state_id = s.state_id
+
+        # Pre-existing stats reflect that 10.0
+        short_row = StatisticsShortTerm(
+            metadata_id=stat_meta_id, start_ts=period,
+            mean=10.0, min=10.0, max=10.0, state=10.0,
+        )
+        long_row = Statistics(
+            metadata_id=stat_meta_id, start_ts=hour_start,
+            mean=10.0, min=10.0, max=10.0, state=10.0,
+        )
+        db_session.add_all([short_row, long_row])
+        db_session.flush()
+        short_id, long_id = short_row.id, long_row.id
+
+        # User finds the value was wrong (should have been 50.0) and corrects it
+        result = _update_record_sync(mock_hass, state_id, "50.0", None, None, None)
+
+        assert result["success"] is True
+        assert result["statistics_stale"] is False
+        db_session.expire_all()
+
+        # Short-term reflects the new value
+        reloaded_short = db_session.get(StatisticsShortTerm, short_id)
+        assert reloaded_short.mean == 50.0
+        assert reloaded_short.min == 50.0
+        assert reloaded_short.max == 50.0
+        assert reloaded_short.state == 50.0
+
+        # Long-term re-aggregates from the (single) updated short-term row
+        reloaded_long = db_session.get(Statistics, long_id)
+        assert reloaded_long.mean == 50.0
+        assert reloaded_long.min == 50.0
+        assert reloaded_long.max == 50.0
+        assert reloaded_long.state == 50.0

@@ -29,6 +29,11 @@ class HistoryEditorPanel extends HTMLElement {
     this._scrollObserver = null;  // IntersectionObserver for scroll sentinel
     this._topObserver = null;     // IntersectionObserver for load-prev row
     this._mutationObserver = null; // MutationObserver to detect DOM clearing
+    // Bulk-selection state.  Set of state_id (states mode) or stat id
+    // (statistics mode).  Persists across reloads within the same data
+    // source / entity; cleared when those change.
+    this._selectedIds = new Set();
+    this._editMode = 'single';     // 'single' | 'add' | 'bulk'
   }
 
   _debugLog(...args) {
@@ -166,7 +171,11 @@ class HistoryEditorPanel extends HTMLElement {
     entityForm.addEventListener('value-changed', (ev) => {
       this._debugLog('[HistoryEditor] Entity form value changed:', ev.detail.value);
       if (ev.detail.value && ev.detail.value.entity_id) {
-        this.selectedEntity = ev.detail.value.entity_id;
+        const newEntity = ev.detail.value.entity_id;
+        if (newEntity !== this.selectedEntity && this._selectedIds && this._selectedIds.size > 0) {
+          this._clearSelection();
+        }
+        this.selectedEntity = newEntity;
         this._debugLog('[HistoryEditor] Selected entity:', this.selectedEntity);
         // Automatically load records when entity is selected
         this.loadRecords();
@@ -174,6 +183,7 @@ class HistoryEditorPanel extends HTMLElement {
         // Handle case where entity is cleared
         this.selectedEntity = null;
         this.records = [];
+        if (this._clearSelection) this._clearSelection();
         this.displayRecords([]);
         this._debugLog('[HistoryEditor] Entity selection cleared');
       }
@@ -561,6 +571,57 @@ class HistoryEditorPanel extends HTMLElement {
         .load-prev-cell:hover {
           text-decoration: underline;
         }
+        /* Bulk selection */
+        .bulk-action-bar {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 10px 16px;
+          margin-bottom: 12px;
+          background: var(--primary-color);
+          color: var(--text-primary-color, white);
+          border-radius: 6px;
+          font-size: 14px;
+        }
+        .bulk-action-bar button {
+          background: rgba(255, 255, 255, 0.18);
+          color: inherit;
+          border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+        .bulk-action-bar button:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+        .bulk-action-bar button.danger {
+          background: var(--error-color, #db4437);
+          border-color: var(--error-color, #db4437);
+        }
+        .bulk-selected-count {
+          flex: 0 0 auto;
+          font-weight: 500;
+        }
+        .checkbox-cell {
+          width: 32px;
+          padding: 8px 4px !important;
+          text-align: center;
+        }
+        .row-select:disabled {
+          cursor: not-allowed;
+          opacity: 0.4;
+        }
+        .bulk-mode-banner {
+          padding: 10px 12px;
+          margin-bottom: 12px;
+          background: var(--info-color, #4285f4);
+          color: var(--text-primary-color, white);
+          border-radius: 4px;
+          font-size: 13px;
+        }
+        .form-help {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          margin-top: -4px;
+          margin-bottom: 8px;
+        }
       </style>
 
       <div class="header">
@@ -621,6 +682,13 @@ class HistoryEditorPanel extends HTMLElement {
         <button id="scroll-bottom-btn" class="secondary" title="Go to the last (oldest) records">⬇ Bottom</button>
       </div>
 
+      <div id="bulk-action-bar" class="bulk-action-bar" style="display:none">
+        <span id="bulk-selected-count" class="bulk-selected-count">0 selected</span>
+        <button id="bulk-edit-btn" type="button" class="secondary">Edit Selected</button>
+        <button id="bulk-delete-btn" type="button" class="danger">Delete Selected</button>
+        <button id="bulk-clear-btn" type="button" class="secondary">Clear</button>
+      </div>
+
       <div class="table-container">
         <div id="records-display"></div>
         <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">⟳ Loading more records...</div>
@@ -634,7 +702,11 @@ class HistoryEditorPanel extends HTMLElement {
             <button id="modal-close" class="secondary">✕</button>
           </div>
           <form id="edit-form">
-            <div class="form-field">
+            <div id="bulk-mode-banner" class="bulk-mode-banner" style="display:none">
+              <span id="bulk-mode-banner-text"></span>
+              <div class="form-help">Leave a field empty to keep the current value on each selected record.</div>
+            </div>
+            <div id="single-id-field" class="form-field">
               <label id="id-field-label">State ID</label>
               <input type="text" id="edit-state-id" readonly>
             </div>
@@ -743,6 +815,9 @@ class HistoryEditorPanel extends HTMLElement {
       this.dataSource = e.target.value;
       // Hide "Add New Record" button for statistics (stats are computed, not manually created)
       addBtn.style.display = this.dataSource === 'states' ? '' : 'none';
+      // Selection is per data source — IDs from short-term and long-term tables
+      // collide in numeric space, so clear when switching.
+      this._clearSelection();
       if (this.selectedEntity) {
         this.loadRecords();
       }
@@ -751,13 +826,13 @@ class HistoryEditorPanel extends HTMLElement {
     // Set up event delegation for Edit and Delete buttons in the records table
     tableContainer.addEventListener('click', (e) => {
       const target = e.target;
-      
+
       // Handle Edit button clicks
       if (target.classList.contains('edit-btn') && !target.disabled) {
         const stateId = parseInt(target.dataset.stateId);
         this.editRecord(stateId);
       }
-      
+
       // Handle Delete button clicks
       if (target.classList.contains('delete-btn') && !target.disabled) {
         const stateId = parseInt(target.dataset.stateId);
@@ -769,6 +844,41 @@ class HistoryEditorPanel extends HTMLElement {
         this._loadPrevRecords();
       }
     });
+
+    // Selection: per-row checkbox + select-all in header
+    tableContainer.addEventListener('change', (e) => {
+      const target = e.target;
+      if (target.classList && target.classList.contains('row-select')) {
+        const id = parseInt(target.dataset.rowId);
+        if (target.checked) {
+          this._selectedIds.add(id);
+        } else {
+          this._selectedIds.delete(id);
+        }
+        this._refreshSelectAllState();
+        this._updateBulkActionBar();
+      } else if (target.id === 'select-all-rows') {
+        const checkboxes = this.querySelectorAll('.row-select:not(:disabled)');
+        checkboxes.forEach((cb) => {
+          const id = parseInt(cb.dataset.rowId);
+          cb.checked = target.checked;
+          if (target.checked) {
+            this._selectedIds.add(id);
+          } else {
+            this._selectedIds.delete(id);
+          }
+        });
+        this._updateBulkActionBar();
+      }
+    });
+
+    // Bulk-action toolbar buttons
+    const bulkEditBtn = this.querySelector('#bulk-edit-btn');
+    const bulkDeleteBtn = this.querySelector('#bulk-delete-btn');
+    const bulkClearBtn = this.querySelector('#bulk-clear-btn');
+    if (bulkEditBtn) bulkEditBtn.addEventListener('click', () => this._openBulkEditModal());
+    if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', () => this._handleBulkDelete());
+    if (bulkClearBtn) bulkClearBtn.addEventListener('click', () => this._clearSelection());
     
     // Set up ha-form if hass is available
     if (this._hass) {
@@ -947,6 +1057,7 @@ class HistoryEditorPanel extends HTMLElement {
       <table>
         <thead>
           <tr>
+            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="Select all visible"></th>
             <th>ID</th>
             <th>State</th>
             <th>Attributes</th>
@@ -956,18 +1067,20 @@ class HistoryEditorPanel extends HTMLElement {
         </thead>
         <tbody id="records-tbody">
           <tr id="load-prev-row" style="display:none">
-            <td colspan="5" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+            <td colspan="6" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
           </tr>
     `;
 
     records.forEach(record => {
       const attributes = JSON.stringify(record.attributes || {});
-      const attributesPreview = attributes.length > 50 
-        ? attributes.substring(0, 50) + '...' 
+      const attributesPreview = attributes.length > 50
+        ? attributes.substring(0, 50) + '...'
         : attributes;
+      const checked = this._selectedIds.has(record.state_id) ? 'checked' : '';
 
       html += `
         <tr data-page="0">
+          <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.state_id}" ${checked}></td>
           <td data-label="ID">${record.state_id}</td>
           <td data-label="State">${this.escapeHtml(record.state)}</td>
           <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
@@ -983,6 +1096,8 @@ class HistoryEditorPanel extends HTMLElement {
     html += '</tbody></table>';
     display.innerHTML = html;
     this._setupScrollObserver();
+    this._refreshSelectAllState();
+    this._updateBulkActionBar();
   }
 
   escapeHtml(text) {
@@ -1100,9 +1215,30 @@ class HistoryEditorPanel extends HTMLElement {
   hideModal() {
     const modal = this.querySelector('#edit-modal');
     modal.classList.remove('show');
+    // Reset bulk-mode UI so the next single-row open shows everything again
+    if (this._editMode === 'bulk') {
+      const banner = this.querySelector('#bulk-mode-banner');
+      const idField = this.querySelector('#single-id-field');
+      if (banner) banner.style.display = 'none';
+      if (idField) idField.style.display = '';
+      const entityField = this.querySelector('#edit-entity-id').closest('.form-field');
+      if (entityField) entityField.style.display = '';
+      const tsField = this.querySelector('#edit-last-updated').closest('.form-field');
+      if (tsField) tsField.style.display = '';
+      const startField = this.querySelector('#edit-stat-start').closest('.form-field');
+      if (startField) startField.style.display = '';
+    }
+    this._editMode = 'single';
   }
 
   async saveRecord() {
+    // Bulk mode dispatches to a different endpoint — never touches the single-row
+    // helpers below.
+    if (this._editMode === 'bulk') {
+      await this._handleBulkSave();
+      return;
+    }
+
     const stateId = this.querySelector('#edit-state-id').value;
 
     // Handle statistics mode
@@ -1322,6 +1458,7 @@ class HistoryEditorPanel extends HTMLElement {
       <table>
         <thead>
           <tr>
+            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="Select all unlocked visible rows"></th>
             <th>ID</th>
             <th>Start Time</th>
             <th>Mean</th>
@@ -1334,7 +1471,7 @@ class HistoryEditorPanel extends HTMLElement {
         </thead>
         <tbody id="records-tbody">
           <tr id="load-prev-row" style="display:none">
-            <td colspan="8" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+            <td colspan="9" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
           </tr>
     `;
 
@@ -1348,9 +1485,11 @@ class HistoryEditorPanel extends HTMLElement {
       const disabledAttr = locked ? 'disabled' : '';
       const titleAttr = locked ? `title="${lockTitle}"` : '';
       const lockIcon = locked ? ' 🔒' : '';
+      const checked = this._selectedIds.has(record.id) ? 'checked' : '';
 
       html += `
         <tr data-page="0">
+          <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.id}" ${disabledAttr} ${titleAttr} ${checked}></td>
           <td data-label="ID">${record.id}${lockIcon}</td>
           <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
           <td data-label="Mean">${fmtNum(record.mean)}</td>
@@ -1369,6 +1508,8 @@ class HistoryEditorPanel extends HTMLElement {
     html += '</tbody></table>';
     display.innerHTML = html;
     this._setupScrollObserver();
+    this._refreshSelectAllState();
+    this._updateBulkActionBar();
   }
 
   async _saveStatistic(statId) {
@@ -1444,6 +1585,229 @@ class HistoryEditorPanel extends HTMLElement {
       console.error('Error deleting statistic:', error);
       alert('Error deleting statistic: ' + error.message);
     }
+  }
+
+  // ─── Bulk selection / bulk edit / bulk delete ─────────────────────────────
+
+  _clearSelection() {
+    this._selectedIds.clear();
+    this.querySelectorAll('.row-select').forEach((cb) => { cb.checked = false; });
+    this._refreshSelectAllState();
+    this._updateBulkActionBar();
+  }
+
+  _refreshSelectAllState() {
+    const selectAll = this.querySelector('#select-all-rows');
+    if (!selectAll) return;
+    const visible = this.querySelectorAll('.row-select:not(:disabled)');
+    if (visible.length === 0) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+      return;
+    }
+    let checked = 0;
+    visible.forEach((cb) => { if (cb.checked) checked++; });
+    selectAll.checked = (checked === visible.length);
+    selectAll.indeterminate = (checked > 0 && checked < visible.length);
+  }
+
+  _updateBulkActionBar() {
+    const bar = this.querySelector('#bulk-action-bar');
+    if (!bar) return;
+    const count = this._selectedIds.size;
+    if (count === 0) {
+      bar.style.display = 'none';
+    } else {
+      bar.style.display = 'flex';
+      const label = this.querySelector('#bulk-selected-count');
+      if (label) label.textContent = `${count} selected`;
+    }
+  }
+
+  _openBulkEditModal() {
+    if (this._selectedIds.size === 0) return;
+    this._editMode = 'bulk';
+
+    const modal = this.querySelector('#edit-modal');
+    const title = this.querySelector('#modal-title');
+    const banner = this.querySelector('#bulk-mode-banner');
+    const bannerText = this.querySelector('#bulk-mode-banner-text');
+    const idField = this.querySelector('#single-id-field');
+    const form = this.querySelector('#edit-form');
+
+    form.reset();
+    idField.style.display = 'none';
+    banner.style.display = 'block';
+    const count = this._selectedIds.size;
+    bannerText.textContent = `Editing ${count} selected ${count === 1 ? 'record' : 'records'}.`;
+
+    if (this.dataSource === 'states') {
+      title.textContent = `Bulk Edit (${count} state records)`;
+      this.querySelector('#states-form-fields').style.display = 'block';
+      this.querySelector('#stats-form-fields').style.display = 'none';
+      // Hide entity_id and timestamp fields in bulk mode — those don't make
+      // sense to apply uniformly across many records.
+      const entityField = this.querySelector('#edit-entity-id').closest('.form-field');
+      if (entityField) entityField.style.display = 'none';
+      const tsField = this.querySelector('#edit-last-updated').closest('.form-field');
+      if (tsField) tsField.style.display = 'none';
+    } else {
+      const isShort = this.dataSource === 'statistics_short_term';
+      title.textContent = `Bulk Edit (${count} ${isShort ? 'short-term' : 'long-term'} stats)`;
+      this.querySelector('#states-form-fields').style.display = 'none';
+      this.querySelector('#stats-form-fields').style.display = 'block';
+      // Hide start_time in bulk mode — different per row.
+      const startField = this.querySelector('#edit-stat-start').closest('.form-field');
+      if (startField) startField.style.display = 'none';
+    }
+
+    modal.classList.add('show');
+  }
+
+  async _handleBulkDelete() {
+    const count = this._selectedIds.size;
+    if (count === 0) return;
+    const label = this.dataSource === 'states' ? 'state record' : 'statistics row';
+    const proceed = confirm(
+      `Delete ${count} ${label}${count === 1 ? '' : 's'}?\n\nThis cannot be undone. ` +
+      (this.dataSource === 'states'
+        ? 'Affected statistics periods will be recalculated.'
+        : 'Rows blocked by the source-data guard will be skipped and reported.')
+    );
+    if (!proceed) return;
+
+    try {
+      const ids = Array.from(this._selectedIds);
+      const url = this.dataSource === 'states'
+        ? '/api/history_editor/bulk_delete'
+        : '/api/history_editor/statistics/bulk_delete';
+      const body = this.dataSource === 'states'
+        ? { state_ids: ids }
+        : { ids, statistic_type: this.dataSource === 'statistics_short_term' ? 'short_term' : 'long_term' };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+
+      if (!result.success) {
+        alert('Error: ' + (result.error || 'Bulk delete failed'));
+        return;
+      }
+      alert(this._formatBulkResult(result, 'deleted'));
+      this._clearSelection();
+      this.loadRecords();
+    } catch (err) {
+      console.error('Bulk delete failed:', err);
+      alert('Bulk delete failed: ' + err.message);
+    }
+  }
+
+  async _handleBulkSave() {
+    const ids = Array.from(this._selectedIds);
+    if (ids.length === 0) return;
+
+    let url;
+    let body;
+    if (this.dataSource === 'states') {
+      const newState = this.querySelector('#edit-state').value;
+      const attrText = this.querySelector('#edit-attributes').value;
+      body = { state_ids: ids };
+      if (newState !== '') body.state = newState;
+      if (attrText !== '') {
+        try {
+          body.attributes = JSON.parse(attrText);
+        } catch (err) {
+          alert('Attributes must be valid JSON: ' + err.message);
+          return;
+        }
+      }
+      if (!('state' in body) && !('attributes' in body)) {
+        alert('Provide a new state value or new attributes (or both) before saving.');
+        return;
+      }
+      url = '/api/history_editor/bulk_update';
+    } else {
+      const isShort = this.dataSource === 'statistics_short_term';
+      const meanV = this.querySelector('#edit-stat-mean').value;
+      const minV = this.querySelector('#edit-stat-min').value;
+      const maxV = this.querySelector('#edit-stat-max').value;
+      const sumV = this.querySelector('#edit-stat-sum').value;
+      const stateV = this.querySelector('#edit-stat-state-val').value;
+
+      body = {
+        ids,
+        statistic_type: isShort ? 'short_term' : 'long_term',
+      };
+      const setIfNumber = (key, raw) => {
+        if (raw === '') return;
+        const n = parseFloat(raw);
+        if (!isNaN(n)) body[key] = n;
+      };
+      setIfNumber('mean', meanV);
+      setIfNumber('min', minV);
+      setIfNumber('max', maxV);
+      setIfNumber('sum', sumV);
+      setIfNumber('state', stateV);
+      if (Object.keys(body).length <= 2) {
+        alert('Provide at least one numeric value (mean, min, max, sum, state) before saving.');
+        return;
+      }
+      url = '/api/history_editor/statistics/bulk_update';
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._hass.auth.data.access_token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+
+      if (!result.success) {
+        alert('Error: ' + (result.error || 'Bulk update failed'));
+        return;
+      }
+      alert(this._formatBulkResult(result, 'updated'));
+      this.hideModal();
+      this._clearSelection();
+      this.loadRecords();
+    } catch (err) {
+      console.error('Bulk update failed:', err);
+      alert('Bulk update failed: ' + err.message);
+    }
+  }
+
+  _formatBulkResult(result, verb) {
+    const count = (verb === 'deleted') ? result.deleted_count : result.updated_count;
+    const lines = [`${count} record${count === 1 ? '' : 's'} ${verb}.`];
+    if (result.blocked && result.blocked.length) {
+      lines.push(`${result.blocked.length} blocked by source-data guard:`);
+      // Show up to 5 reasons inline; collapse the rest
+      const sample = result.blocked.slice(0, 5);
+      sample.forEach(({ id, reason }) => lines.push(`  • id=${id}: ${reason}`));
+      if (result.blocked.length > 5) {
+        lines.push(`  • …and ${result.blocked.length - 5} more`);
+      }
+    }
+    if (result.not_found && result.not_found.length) {
+      lines.push(`${result.not_found.length} id${result.not_found.length === 1 ? '' : 's'} not found.`);
+    }
+    if (result.statistics_stale) {
+      lines.push('');
+      lines.push('Statistics may be stale — call history_editor.recalculate_statistics to fix.');
+    }
+    lines.push('');
+    lines.push('To see the change in HA graphs, navigate away and back, or reload the browser tab.');
+    return lines.join('\n');
   }
 
   // ─── Infinite scroll helpers ──────────────────────────────────────────────

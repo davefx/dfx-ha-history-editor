@@ -1072,25 +1072,7 @@ class HistoryEditorPanel extends HTMLElement {
     `;
 
     records.forEach(record => {
-      const attributes = JSON.stringify(record.attributes || {});
-      const attributesPreview = attributes.length > 50
-        ? attributes.substring(0, 50) + '...'
-        : attributes;
-      const checked = this._selectedIds.has(record.state_id) ? 'checked' : '';
-
-      html += `
-        <tr data-page="0">
-          <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.state_id}" ${checked}></td>
-          <td data-label="ID">${record.state_id}</td>
-          <td data-label="State">${this.escapeHtml(record.state)}</td>
-          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
-          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
-          </td>
-        </tr>
-      `;
+      html += `<tr data-page="0">${this._buildStateRowCells(record)}</tr>`;
     });
 
     html += '</tbody></table>';
@@ -1452,8 +1434,6 @@ class HistoryEditorPanel extends HTMLElement {
       return;
     }
 
-    const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
-
     let html = `
       <table>
         <thead>
@@ -1476,33 +1456,7 @@ class HistoryEditorPanel extends HTMLElement {
     `;
 
     records.forEach(record => {
-      const locked = record.has_source_data === true;
-      const lockTitle = locked
-        ? (this.dataSource === 'statistics_short_term'
-          ? 'State history exists for this period — edit state history instead'
-          : 'Short-term statistics exist for this period — edit short-term statistics instead')
-        : '';
-      const disabledAttr = locked ? 'disabled' : '';
-      const titleAttr = locked ? `title="${lockTitle}"` : '';
-      const lockIcon = locked ? ' 🔒' : '';
-      const checked = this._selectedIds.has(record.id) ? 'checked' : '';
-
-      html += `
-        <tr data-page="0">
-          <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.id}" ${disabledAttr} ${titleAttr} ${checked}></td>
-          <td data-label="ID">${record.id}${lockIcon}</td>
-          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
-          <td data-label="Mean">${fmtNum(record.mean)}</td>
-          <td data-label="Min">${fmtNum(record.min)}</td>
-          <td data-label="Max">${fmtNum(record.max)}</td>
-          <td data-label="Sum">${fmtNum(record.sum)}</td>
-          <td data-label="State">${fmtNum(record.state)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Delete</button>
-          </td>
-        </tr>
-      `;
+      html += `<tr data-page="0">${this._buildStatRowCells(record)}</tr>`;
     });
 
     html += '</tbody></table>';
@@ -1858,55 +1812,65 @@ class HistoryEditorPanel extends HTMLElement {
     this._topObserver.observe(loadPrevRow);
   }
 
+  _buildStateRowCells(record) {
+    const attributes = JSON.stringify(record.attributes || {});
+    const attributesPreview = attributes.length > 50
+      ? attributes.substring(0, 50) + '...'
+      : attributes;
+    const checked = this._selectedIds.has(record.state_id) ? 'checked' : '';
+    return `
+      <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.state_id}" ${checked}></td>
+      <td data-label="ID">${record.state_id}</td>
+      <td data-label="State">${this.escapeHtml(record.state)}</td>
+      <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
+      <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
+      <td class="actions">
+        <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
+        <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
+      </td>`;
+  }
+
+  _buildStatRowCells(record) {
+    const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
+    const locked = record.has_source_data === true;
+    const lockTitle = locked
+      ? (this.dataSource === 'statistics_short_term'
+        ? 'State history exists for this period — edit state history instead'
+        : 'Short-term statistics exist for this period — edit short-term statistics instead')
+      : '';
+    const lockIcon = locked ? ' 🔒' : '';
+    const disabledAttr = locked ? 'disabled' : '';
+    const titleAttr = locked ? `title="${lockTitle}"` : '';
+    const checked = this._selectedIds.has(record.id) ? 'checked' : '';
+    return `
+      <td class="checkbox-cell"><input type="checkbox" class="row-select" data-row-id="${record.id}" ${disabledAttr} ${titleAttr} ${checked}></td>
+      <td data-label="ID">${record.id}${lockIcon}</td>
+      <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
+      <td data-label="Mean">${fmtNum(record.mean)}</td>
+      <td data-label="Min">${fmtNum(record.min)}</td>
+      <td data-label="Max">${fmtNum(record.max)}</td>
+      <td data-label="Sum">${fmtNum(record.sum)}</td>
+      <td data-label="State">${fmtNum(record.state)}</td>
+      <td class="actions">
+        <button class="secondary edit-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Edit</button>
+        <button class="danger delete-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Delete</button>
+      </td>`;
+  }
+
   _appendToTable(records, pageIdx) {
     const tbody = this.querySelector('#records-tbody');
     if (!tbody) return;
-    if (this.dataSource !== 'states') {
-      const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
-      records.forEach(record => {
-        const locked = record.has_source_data === true;
-        const lockTitle = locked
-          ? (this.dataSource === 'statistics_short_term'
-            ? 'State history exists for this period — edit state history instead'
-            : 'Short-term statistics exist for this period — edit short-term statistics instead')
-          : '';
-        const lockIcon = locked ? ' 🔒' : '';
-        const tr = document.createElement('tr');
-        tr.dataset.page = pageIdx;
-        tr.innerHTML = `
-          <td data-label="ID">${record.id}${lockIcon}</td>
-          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
-          <td data-label="Mean">${fmtNum(record.mean)}</td>
-          <td data-label="Min">${fmtNum(record.min)}</td>
-          <td data-label="Max">${fmtNum(record.max)}</td>
-          <td data-label="Sum">${fmtNum(record.sum)}</td>
-          <td data-label="State">${fmtNum(record.state)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Delete</button>
-          </td>`;
-        tbody.appendChild(tr);
-      });
-    } else {
-      records.forEach(record => {
-        const attributes = JSON.stringify(record.attributes || {});
-        const attributesPreview = attributes.length > 50
-          ? attributes.substring(0, 50) + '...'
-          : attributes;
-        const tr = document.createElement('tr');
-        tr.dataset.page = pageIdx;
-        tr.innerHTML = `
-          <td data-label="ID">${record.state_id}</td>
-          <td data-label="State">${this.escapeHtml(record.state)}</td>
-          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
-          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
-          </td>`;
-        tbody.appendChild(tr);
-      });
-    }
+    const buildCells = this.dataSource !== 'states'
+      ? (r) => this._buildStatRowCells(r)
+      : (r) => this._buildStateRowCells(r);
+    records.forEach((record) => {
+      const tr = document.createElement('tr');
+      tr.dataset.page = pageIdx;
+      tr.innerHTML = buildCells(record);
+      tbody.appendChild(tr);
+    });
+    this._refreshSelectAllState();
+    this._updateBulkActionBar();
   }
 
   _prependToTable(records, pageIdx) {
@@ -1916,53 +1880,18 @@ class HistoryEditorPanel extends HTMLElement {
     const loadPrevRow = tbody.querySelector('#load-prev-row');
     const insertBefore = loadPrevRow ? loadPrevRow.nextSibling : tbody.firstChild;
     const fragment = document.createDocumentFragment();
-    if (this.dataSource !== 'states') {
-      const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
-      records.forEach(record => {
-        const locked = record.has_source_data === true;
-        const lockTitle = locked
-          ? (this.dataSource === 'statistics_short_term'
-            ? 'State history exists for this period — edit state history instead'
-            : 'Short-term statistics exist for this period — edit short-term statistics instead')
-          : '';
-        const lockIcon = locked ? ' 🔒' : '';
-        const tr = document.createElement('tr');
-        tr.dataset.page = pageIdx;
-        tr.innerHTML = `
-          <td data-label="ID">${record.id}${lockIcon}</td>
-          <td data-label="Start Time">${this.formatDatetimeDisplay(record.start)}</td>
-          <td data-label="Mean">${fmtNum(record.mean)}</td>
-          <td data-label="Min">${fmtNum(record.min)}</td>
-          <td data-label="Max">${fmtNum(record.max)}</td>
-          <td data-label="Sum">${fmtNum(record.sum)}</td>
-          <td data-label="State">${fmtNum(record.state)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.id}"${locked ? ' disabled title="' + lockTitle + '"' : ''}>Delete</button>
-          </td>`;
-        fragment.appendChild(tr);
-      });
-    } else {
-      records.forEach(record => {
-        const attributes = JSON.stringify(record.attributes || {});
-        const attributesPreview = attributes.length > 50
-          ? attributes.substring(0, 50) + '...'
-          : attributes;
-        const tr = document.createElement('tr');
-        tr.dataset.page = pageIdx;
-        tr.innerHTML = `
-          <td data-label="ID">${record.state_id}</td>
-          <td data-label="State">${this.escapeHtml(record.state)}</td>
-          <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
-          <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
-          <td class="actions">
-            <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
-            <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
-          </td>`;
-        fragment.appendChild(tr);
-      });
-    }
+    const buildCells = this.dataSource !== 'states'
+      ? (r) => this._buildStatRowCells(r)
+      : (r) => this._buildStateRowCells(r);
+    records.forEach((record) => {
+      const tr = document.createElement('tr');
+      tr.dataset.page = pageIdx;
+      tr.innerHTML = buildCells(record);
+      fragment.appendChild(tr);
+    });
     tbody.insertBefore(fragment, insertBefore);
+    this._refreshSelectAllState();
+    this._updateBulkActionBar();
   }
 
   _pruneTopPage() {

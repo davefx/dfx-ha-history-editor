@@ -122,8 +122,6 @@ recalculate_statistics:
     over a given time range. Short-term (5-minute) statistics are recalculated from
     the underlying state history records; long-term (hourly) statistics are
     recalculated by re-aggregating the short-term statistics.
-  response:
-    required: true
   fields:
     entity_id:
       name: Entity ID
@@ -164,8 +162,6 @@ bulk_update_record:
     Apply the same field overrides (state, attributes, timestamps) to multiple
     state history records in a single transaction. Affected statistics periods
     are recalculated once at the end of the batch.
-  response:
-    required: true
   fields:
     state_ids:
       name: State IDs
@@ -218,8 +214,6 @@ bulk_update_statistic:
     independently checked against the source-data guard; rows that have
     underlying state history (short-term) or underlying short-term rows
     (long-term) are reported as blocked and skipped without aborting the batch.
-  response:
-    required: true
   fields:
     ids:
       name: Statistic IDs
@@ -286,8 +280,6 @@ bulk_delete_statistic:
   description: >
     Delete multiple statistics rows in a single transaction. Source-data
     guards apply per row; blocked rows are reported and skipped.
-  response:
-    required: true
   fields:
     ids:
       name: Statistic IDs

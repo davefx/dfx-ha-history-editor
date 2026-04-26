@@ -19,7 +19,17 @@ from homeassistant.components.recorder.db_schema import States, StatesMeta
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .schema_compat import ensure_schema_current
+
 _LOGGER = logging.getLogger(__name__)
+
+
+def _check_schema(hass: HomeAssistant) -> dict[str, Any] | None:
+    """Return an error response dict if the recorder schema is stale, else None."""
+    err = ensure_schema_current(hass)
+    if err:
+        return {"success": False, "error": err}
+    return None
 
 # Try to import statistics tables if available (newer HA versions).
 # The module stays importable on older HA releases; HAS_STATISTICS gates all
@@ -450,6 +460,9 @@ def get_statistics_sync(
     statistic_type: str = "long_term",
 ) -> dict[str, Any]:
     """Get statistics records for an entity (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
 
@@ -549,6 +562,9 @@ def update_statistic_sync(
     statistic_type: str = "long_term",
 ) -> dict[str, Any]:
     """Update a statistics record (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
 
@@ -659,6 +675,9 @@ def delete_statistic_sync(
     statistic_type: str = "long_term",
 ) -> dict[str, Any]:
     """Delete a statistics record (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
 
@@ -839,6 +858,9 @@ def bulk_update_statistic_sync(
       - ``blocked``: list of ``{id, reason}`` for rows blocked by guards
       - ``not_found``: list of ids that did not match any row
     """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
     if not ids:
@@ -932,6 +954,9 @@ def bulk_delete_statistic_sync(
     Same guard / reporting semantics as ``bulk_update_statistic_sync``.  For
     short-term deletions, the long-term cascade runs once per affected hour.
     """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
     if not ids:
@@ -1016,6 +1041,9 @@ def recalculate_statistics_sync(
       overlaps [start_time, end_time) by re-aggregating the short-term rows.
     - ``"both"`` (default) – recalculates short-term first, then long-term.
     """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not HAS_STATISTICS:
         return {"success": False, "error": "Statistics tables not available in this HA version"}
 

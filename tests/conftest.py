@@ -125,8 +125,18 @@ def mock_hass(db_session, monkeypatch):
 
     from custom_components import history_editor as pkg_module
     from custom_components.history_editor import statistics as stats_module
+    from custom_components.history_editor import schema_compat
 
     monkeypatch.setattr(stats_module, "get_instance", lambda hass: recorder_stub)
     monkeypatch.setattr(pkg_module, "get_instance", lambda hass: recorder_stub)
+
+    # Prime the schema-validation cache so _check_schema() is a no-op in tests.
+    # The test DB is known-good (we just created the schema from HA's Base).
+    try:
+        from homeassistant.const import __version__ as ha_version
+    except ImportError:
+        ha_version = "test"
+    monkeypatch.setattr(schema_compat, "_validated_ha_version", ha_version)
+    monkeypatch.setattr(schema_compat, "_validation_errors", [])
 
     return MagicMock()  # placeholder hass; get_instance is patched out

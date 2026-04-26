@@ -31,6 +31,7 @@ except ImportError:
     EVENT_RECORDER_HOURLY_STATISTICS_GENERATED = "recorder_hourly_statistics_generated"
 
 from .panel import async_register_panel
+from .schema_compat import ensure_schema_current, validate_schema_sync
 from .statistics import (
     HAS_STATISTICS,
     bulk_delete_statistic_sync,
@@ -860,6 +861,14 @@ class BulkDeleteStatisticView(HomeAssistantView):
 
 
 
+def _check_schema(hass: HomeAssistant) -> dict[str, Any] | None:
+    """Return an error response dict if the recorder schema is stale, else None."""
+    err = ensure_schema_current(hass)
+    if err:
+        return {"success": False, "error": err}
+    return None
+
+
 def _get_records_sync(
     hass: HomeAssistant,
     entity_id: str,
@@ -868,6 +877,9 @@ def _get_records_sync(
     limit: int
 ) -> dict[str, Any]:
     """Get history records for an entity (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     recorder = get_instance(hass)
     if recorder is None:
         _LOGGER.error("Recorder component not available")
@@ -969,6 +981,20 @@ def _fire_statistics_events(hass: HomeAssistant) -> None:
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Editor component."""
     _LOGGER.info("Setting up History Editor component")
+
+    # Probe the recorder schema before registering any endpoints.
+    # If the DB layout doesn't match what we expect, refuse to load rather
+    # than risk corrupting data after a HA upgrade.
+    schema_errors = await hass.async_add_executor_job(validate_schema_sync, hass)
+    if schema_errors:
+        _LOGGER.error(
+            "History Editor will NOT load — recorder schema is incompatible:\n  %s\n"
+            "This usually means Home Assistant was upgraded to a version that "
+            "changed the recorder database layout.  Check for a History Editor "
+            "update that supports this HA version.",
+            "\n  ".join(schema_errors),
+        )
+        return False
 
     # Register REST API views
     hass.http.register_view(GetRecordsView(hass))
@@ -1172,6 +1198,9 @@ def _update_record_sync(
     new_last_updated: datetime | None,
 ) -> dict[str, Any]:
     """Update a history record (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     recorder = get_instance(hass)
     if recorder is None:
         _LOGGER.error("Recorder component not available")
@@ -1232,6 +1261,9 @@ def _update_record_sync(
 
 def _delete_record_sync(hass: HomeAssistant, state_id: int) -> dict[str, Any]:
     """Delete a history record (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     recorder = get_instance(hass)
     if recorder is None:
         _LOGGER.error("Recorder component not available")
@@ -1349,6 +1381,9 @@ def _create_record_sync(
     last_updated: datetime | None,
 ) -> dict[str, Any]:
     """Create a new history record (synchronous)."""
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     recorder = get_instance(hass)
     if recorder is None:
         _LOGGER.error("Recorder component not available")
@@ -1439,6 +1474,9 @@ def _bulk_update_record_sync(
 
     Returns ``{success, updated_count, not_found, statistics_stale}``.
     """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not state_ids:
         return {"success": False, "error": "state_ids must be a non-empty list"}
     if all(v is None for v in (new_state, new_attributes, new_last_changed, new_last_updated)):
@@ -1543,6 +1581,9 @@ def _bulk_delete_record_sync(
 
     Returns ``{success, deleted_count, not_found, statistics_stale}``.
     """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
     if not state_ids:
         return {"success": False, "error": "state_ids must be a non-empty list"}
 

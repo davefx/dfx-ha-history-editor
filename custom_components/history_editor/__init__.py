@@ -228,7 +228,7 @@ class GetRecordsView(HomeAssistantView):
                     )
 
             # Get the records synchronously in executor
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _get_records_sync, self.hass, entity_id, start_time, end_time, limit
             )
 
@@ -300,7 +300,7 @@ class UpdateRecordView(HomeAssistantView):
                     )
             
             # Update the record synchronously in executor
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _update_record_sync,
                 self.hass,
                 state_id,
@@ -354,7 +354,7 @@ class DeleteRecordView(HomeAssistantView):
                 )
 
             # Delete the record synchronously in executor
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _delete_record_sync, self.hass, state_id
             )
 
@@ -429,7 +429,7 @@ class CreateRecordView(HomeAssistantView):
                     )
             
             # Create the record synchronously in executor
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _create_record_sync,
                 self.hass,
                 entity_id,
@@ -517,7 +517,7 @@ class GetStatisticsView(HomeAssistantView):
                         status_code=400
                     )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 get_statistics_sync, self.hass, entity_id, start_time, end_time, limit, statistic_type
             )
             return self.json(result)
@@ -583,7 +583,7 @@ class UpdateStatisticView(HomeAssistantView):
                         status_code=400
                     )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 update_statistic_sync,
                 self.hass,
                 stat_id,
@@ -647,7 +647,7 @@ class DeleteStatisticView(HomeAssistantView):
                     status_code=400
                 )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 delete_statistic_sync, self.hass, stat_id, statistic_type
             )
 
@@ -723,7 +723,7 @@ class BulkUpdateRecordView(HomeAssistantView):
                         status_code=400,
                     )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _bulk_update_record_sync,
                 self.hass,
                 state_ids,
@@ -761,7 +761,7 @@ class BulkDeleteRecordView(HomeAssistantView):
             if err is not None:
                 return self.json({"success": False, "error": err}, status_code=400)
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 _bulk_delete_record_sync, self.hass, state_ids,
             )
 
@@ -800,7 +800,7 @@ class BulkUpdateStatisticView(HomeAssistantView):
                     status_code=400,
                 )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 bulk_update_statistic_sync,
                 self.hass,
                 ids,
@@ -847,7 +847,7 @@ class BulkDeleteStatisticView(HomeAssistantView):
                     status_code=400,
                 )
 
-            result = await self.hass.async_add_executor_job(
+            result = await get_instance(self.hass).async_add_executor_job(
                 bulk_delete_statistic_sync, self.hass, ids, statistic_type,
             )
 
@@ -986,7 +986,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Probe the recorder schema before registering any endpoints.
     # If the DB layout doesn't match what we expect, refuse to load rather
     # than risk corrupting data after a HA upgrade.
-    schema_errors = await hass.async_add_executor_job(validate_schema_sync, hass)
+    schema_errors = await get_instance(hass).async_add_executor_job(validate_schema_sync, hass)
     if schema_errors:
         _LOGGER.error(
             "History Editor will NOT load — recorder schema is incompatible:\n  %s\n"
@@ -1017,7 +1017,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         end_time = call.data.get("end_time")
         limit = call.data.get("limit", 100)
 
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             _get_records_sync, hass, entity_id, start_time, end_time, limit
         )
         return result
@@ -1030,7 +1030,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         new_last_changed = call.data.get("last_changed")
         new_last_updated = call.data.get("last_updated")
 
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             _update_record_sync,
             hass,
             state_id,
@@ -1047,7 +1047,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         """Delete a history record."""
         state_id = call.data["state_id"]
 
-        result = await hass.async_add_executor_job(_delete_record_sync, hass, state_id)
+        result = await get_instance(hass).async_add_executor_job(_delete_record_sync, hass, state_id)
         if not result.get("success"):
             raise HomeAssistantError(result.get("error") or "Failed to delete record")
         _fire_statistics_events(hass)
@@ -1060,7 +1060,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         last_changed = call.data.get("last_changed", dt_util.utcnow())
         last_updated = call.data.get("last_updated", dt_util.utcnow())
 
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             _create_record_sync, hass, entity_id, state, attributes, last_changed, last_updated
         )
         if not result.get("success"):
@@ -1074,7 +1074,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         end_time = call.data["end_time"]
         statistic_type = call.data.get("statistic_type", "both")
 
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             recalculate_statistics_sync,
             hass,
             entity_id,
@@ -1089,7 +1089,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_update_record(call: ServiceCall) -> ServiceResponse:
         """Apply the same field overrides to multiple state history records."""
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             _bulk_update_record_sync,
             hass,
             call.data["state_ids"],
@@ -1105,7 +1105,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_delete_record(call: ServiceCall) -> ServiceResponse:
         """Delete multiple state history records in one transaction."""
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             _bulk_delete_record_sync, hass, call.data["state_ids"],
         )
         if not result.get("success"):
@@ -1115,7 +1115,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_update_statistic(call: ServiceCall) -> ServiceResponse:
         """Apply the same column overrides to multiple statistics rows."""
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             bulk_update_statistic_sync,
             hass,
             call.data["ids"],
@@ -1133,7 +1133,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_delete_statistic(call: ServiceCall) -> ServiceResponse:
         """Delete multiple statistics rows in one transaction."""
-        result = await hass.async_add_executor_job(
+        result = await get_instance(hass).async_add_executor_job(
             bulk_delete_statistic_sync,
             hass,
             call.data["ids"],

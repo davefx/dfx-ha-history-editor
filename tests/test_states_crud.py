@@ -234,41 +234,11 @@ class TestDeleteRecordSync:
         assert result["success"] is False
         assert "999999" in result["error"]
 
-    def test_cascades_short_term_stats_with_same_state_id(
+    def test_delete_succeeds_without_state_id_fk(
         self, db_session, mock_hass, sample_entity,
     ):
-        """The `state_id` FK column on StatisticsShortTerm was removed in later
-        HA releases; skip when absent.  On older schemas the cascade delete
-        drops the linked short-term row to avoid FK violations."""
-        if not hasattr(StatisticsShortTerm, "state_id"):
-            pytest.skip("StatisticsShortTerm.state_id not present in this HA version")
-
-        states_meta_id, stat_meta_id, _ = sample_entity
-        s = _add_state(db_session, states_meta_id, 1_700_000_000, "1.0")
-        state_id = s.state_id
-        short_term = StatisticsShortTerm(
-            metadata_id=stat_meta_id, start_ts=1_700_000_000.0,
-            state=1.0, state_id=state_id,
-        )
-        db_session.add(short_term)
-        db_session.flush()
-        short_id = short_term.id
-
-        result = _delete_record_sync(mock_hass, state_id)
-
-        assert result["success"] is True
-        assert result["statistics_deleted"] == 1
-        db_session.expire_all()
-        assert db_session.get(StatisticsShortTerm, short_id) is None
-
-    def test_delete_no_op_cascade_on_modern_schema(
-        self, db_session, mock_hass, sample_entity,
-    ):
-        """On modern HA (no state_id FK column), deletion should succeed and
-        report statistics_deleted=0 without errors."""
-        if hasattr(StatisticsShortTerm, "state_id"):
-            pytest.skip("state_id FK present; covered by the cascade test above")
-
+        """Deletion should succeed and report statistics_deleted=0 since
+        modern HA no longer has a state_id FK on StatisticsShortTerm."""
         states_meta_id, _, _ = sample_entity
         s = _add_state(db_session, states_meta_id, 1_700_000_000, "1.0")
         state_id = s.state_id

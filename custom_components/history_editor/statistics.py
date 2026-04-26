@@ -748,11 +748,22 @@ def delete_statistic_sync(
                     except Exception as check_err:
                         _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat_id, check_err)
 
-            deleted_count = session.query(table).filter(table.id == stat_id).delete(synchronize_session=False)
+            # Overwrite with the previous period's values so the row
+            # becomes "transparent" rather than creating a gap in the
+            # continuous statistics that HA expects.
+            neutralized = _neutralize_stat_row(session, table, stat)
+            if not neutralized:
+                # First row ever for this entity — no prior to carry forward;
+                # actually remove it since there's no gap to fill.
+                session.query(table).filter(table.id == stat_id).delete(
+                    synchronize_session=False,
+                )
 
-            # Cascade: after deleting a short-term stat, recalculate the corresponding long-term stat
-            if deleted_count > 0 and statistic_type == "short_term" and stat_start_ts is not None:
+            # Cascade: re-aggregate the containing long-term row from
+            # the (now-neutralized or removed) short-term row.
+            if statistic_type == "short_term" and stat_start_ts is not None:
                 try:
+                    session.flush()
                     start_ts_hour = float(int(stat_start_ts // 3600) * 3600)
                     recalculate_long_term_stat(session, stat_metadata_id, start_ts_hour)
                 except Exception as cascade_err:
@@ -762,15 +773,45 @@ def delete_statistic_sync(
                     )
 
             session.commit()
-
-            if deleted_count > 0:
-                _LOGGER.info("Deleted statistic record %s", stat_id)
-                return {"success": True, "id": stat_id}
-            else:
-                return {"success": False, "error": f"Statistic ID {stat_id} not found"}
+            action = "neutralized" if neutralized else "deleted"
+            _LOGGER.info("%s statistic record %s (type=%s)", action.capitalize(), stat_id, statistic_type)
+            return {"success": True, "id": stat_id, "action": action}
     except Exception as err:
         _LOGGER.error("Error deleting statistic: %s", err)
         return {"success": False, "error": str(err)}
+
+
+def _neutralize_stat_row(session, table, stat):
+    """Overwrite a statistics row with the previous period's values.
+
+    HA expects continuous statistics rows (one every 5 min for short-term,
+    one every hour for long-term).  Rather than deleting a row and leaving a
+    gap, we make it "transparent" by copying mean/min/max/state/sum from
+    the preceding row of the same entity.
+
+    Returns ``True`` if a prior row was found and the overwrite succeeded,
+    or ``False`` if this is the very first row for the entity (no prior to
+    carry forward) — in which case the caller should fall back to an actual
+    delete.
+    """
+    prev = (
+        session.query(table)
+        .filter(
+            table.metadata_id == stat.metadata_id,
+            table.start_ts < stat.start_ts,
+        )
+        .order_by(table.start_ts.desc())
+        .first()
+    )
+    if prev is None:
+        return False
+
+    stat.mean = prev.mean
+    stat.min = prev.min
+    stat.max = prev.max
+    stat.state = prev.state
+    stat.sum = prev.sum
+    return True
 
 
 def _check_source_data_blocks_edit(
@@ -949,10 +990,11 @@ def bulk_delete_statistic_sync(
     ids: list[int],
     statistic_type: str = "long_term",
 ) -> dict[str, Any]:
-    """Delete multiple statistics rows in one transaction.
+    """Neutralize multiple statistics rows by overwriting them with the
+    previous period's values (or actually delete if no prior exists).
 
-    Same guard / reporting semantics as ``bulk_update_statistic_sync``.  For
-    short-term deletions, the long-term cascade runs once per affected hour.
+    Same guard / reporting semantics as ``bulk_update_statistic_sync``.
+    For short-term rows, the long-term cascade runs once per affected hour.
     """
     schema_err = _check_schema(hass)
     if schema_err:
@@ -975,6 +1017,13 @@ def bulk_delete_statistic_sync(
             not_found: list[int] = []
             affected_hours: dict[int, set[float]] = {}
 
+            # Load all target rows first, then sort by start_ts ascending.
+            # Processing in chronological order is essential: when
+            # consecutive rows [A, B, C] are all "deleted", A is
+            # neutralized from its prior P, then B copies from the
+            # now-neutralized A (= P), then C copies from B (= P).
+            # Reverse order would leave C with B's original bad value.
+            rows_to_process = []
             for stat_id in ids:
                 stat = session.query(table).filter(table.id == stat_id).first()
                 if stat is None:
@@ -988,11 +1037,18 @@ def bulk_delete_statistic_sync(
                     blocked.append({"id": stat_id, "reason": guard_reason})
                     continue
 
+                rows_to_process.append(stat)
+
+            rows_to_process.sort(key=lambda s: s.start_ts if s.start_ts is not None else 0)
+
+            for stat in rows_to_process:
                 if statistic_type == "short_term" and stat.start_ts is not None:
                     hour_start = float(int(stat.start_ts // 3600) * 3600)
                     affected_hours.setdefault(stat.metadata_id, set()).add(hour_start)
 
-                session.delete(stat)
+                neutralized = _neutralize_stat_row(session, table, stat)
+                if not neutralized:
+                    session.delete(stat)
                 deleted_count += 1
 
             session.flush()
@@ -1011,7 +1067,7 @@ def bulk_delete_statistic_sync(
 
             session.commit()
             _LOGGER.info(
-                "Bulk-deleted %d statistics rows (type=%s); %d blocked, %d not found",
+                "Bulk-neutralized %d statistics rows (type=%s); %d blocked, %d not found",
                 deleted_count, statistic_type, len(blocked), len(not_found),
             )
             return {

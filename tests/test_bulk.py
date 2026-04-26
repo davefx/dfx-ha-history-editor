@@ -465,12 +465,21 @@ class TestBulkUpdateStatistic:
 
 
 class TestBulkDeleteStatistic:
-    def test_deletes_listed_long_term_rows(
+    def test_neutralizes_long_term_rows_with_prior(
         self, db_session, mock_hass, sample_entity,
     ):
+        """Bulk 'delete' of 3 long-term rows that have priors should
+        overwrite each with the preceding row's values, not remove them."""
         _, stat_meta_id, _ = sample_entity
+        prior = _add_long_term(
+            db_session, stat_meta_id, start_ts=3600.0 * 99,
+            state=1.0, mean=1.0, min=1.0, max=1.0, sum=10.0,
+        )
         rows = [
-            _add_long_term(db_session, stat_meta_id, start_ts=3600.0 * (100 + i), state=float(i))
+            _add_long_term(
+                db_session, stat_meta_id, start_ts=3600.0 * (100 + i),
+                state=float(50 + i), mean=float(50 + i),
+            )
             for i in range(3)
         ]
         ids = [r.id for r in rows]
@@ -482,8 +491,29 @@ class TestBulkDeleteStatistic:
         assert result["success"] is True
         assert result["deleted_count"] == 3
         db_session.expire_all()
+        # All three rows still exist, each neutralized from its own prior
         for rid in ids:
-            assert db_session.get(Statistics, rid) is None
+            r = db_session.get(Statistics, rid)
+            assert r is not None
+
+    def test_actually_deletes_first_rows_with_no_prior(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """When the first row has no prior, it should be actually removed."""
+        _, stat_meta_id, _ = sample_entity
+        row = _add_long_term(
+            db_session, stat_meta_id, start_ts=3600.0 * 100, state=1.0,
+        )
+        row_id = row.id
+
+        result = bulk_delete_statistic_sync(
+            mock_hass, [row_id], statistic_type="long_term",
+        )
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        db_session.expire_all()
+        assert db_session.get(Statistics, row_id) is None
 
     def test_blocks_long_term_rows_with_underlying_short_term(
         self, db_session, mock_hass, sample_entity,
@@ -493,7 +523,7 @@ class TestBulkDeleteStatistic:
         hour_a = 3600.0 * 100
         _add_short_term(db_session, stat_meta_id, start_ts=hour_a + 300, state=1.0)
         long_a = _add_long_term(db_session, stat_meta_id, start_ts=hour_a, state=1.0)
-        # Hour B: no short-term → deletable
+        # Hour B: no short-term → neutralized (long_a is the prior)
         hour_b = 3600.0 * 200
         long_b = _add_long_term(db_session, stat_meta_id, start_ts=hour_b, state=2.0)
         ids = [long_a.id, long_b.id]
@@ -507,14 +537,18 @@ class TestBulkDeleteStatistic:
         assert len(result["blocked"]) == 1
         assert result["blocked"][0]["id"] == long_a.id
         db_session.expire_all()
+        # Blocked row untouched
         assert db_session.get(Statistics, long_a.id) is not None
-        assert db_session.get(Statistics, long_b.id) is None
+        # Hour B neutralized (overwritten with long_a's values), not deleted
+        reloaded_b = db_session.get(Statistics, long_b.id)
+        assert reloaded_b is not None
+        assert reloaded_b.state == 1.0
 
-    def test_short_term_bulk_delete_cascades_long_term(
+    def test_short_term_bulk_delete_no_prior_cascades_long_term(
         self, db_session, mock_hass, sample_entity,
     ):
-        """Deleting all short-term rows in an hour should remove the
-        corresponding long-term row (empty-hour fallback with no prior)."""
+        """Neutralizing all short-term rows in an hour when none have priors
+        should actually delete them, and the long-term row should be removed."""
         _, stat_meta_id, _ = sample_entity
         hour_start = 3600.0 * 100
         a = _add_short_term(
@@ -536,6 +570,55 @@ class TestBulkDeleteStatistic:
         assert result["deleted_count"] == 2
         db_session.expire_all()
         assert db_session.get(Statistics, long_id) is None
+
+    def test_consecutive_rows_all_get_prior_values_regardless_of_id_order(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """If the user selects three consecutive short-term rows for deletion,
+        all three should end up with the value from the period BEFORE the
+        first selected row — even when the ids are passed in reverse order.
+
+        This verifies the chronological-sort fix: without it, processing
+        [C, B, A] would leave C with B's original bad value instead of
+        the prior's clean value.
+        """
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        # Prior period: clean value
+        prior = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start - 300,
+            mean=1.0, min=1.0, max=1.0, state=1.0, sum=10.0,
+        )
+        # Three consecutive bad periods
+        a = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=100.0, min=100.0, max=100.0, state=100.0, sum=100.0,
+        )
+        b = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300,
+            mean=200.0, min=200.0, max=200.0, state=200.0, sum=200.0,
+        )
+        c = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 600,
+            mean=300.0, min=300.0, max=300.0, state=300.0, sum=300.0,
+        )
+        a_id, b_id, c_id = a.id, b.id, c.id
+
+        # Pass ids in REVERSE order to prove the sort fixes it
+        result = bulk_delete_statistic_sync(
+            mock_hass, [c_id, a_id, b_id], statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 3
+        db_session.expire_all()
+        # All three should have the prior's values (1.0), not each other's bad ones
+        for rid in [a_id, b_id, c_id]:
+            row = db_session.get(StatisticsShortTerm, rid)
+            assert row is not None, f"Row {rid} should still exist (neutralized, not deleted)"
+            assert row.mean == 1.0, f"Row {rid} mean should be 1.0 from prior, got {row.mean}"
+            assert row.state == 1.0
+            assert row.sum == 10.0
 
     def test_rejects_empty_id_list(self, db_session, mock_hass):
         result = bulk_delete_statistic_sync(

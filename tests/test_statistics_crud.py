@@ -276,7 +276,40 @@ class TestUpdateStatisticSync:
 
 
 class TestDeleteStatisticSync:
-    def test_deletes_long_term_row(self, db_session, mock_hass, sample_entity):
+    def test_neutralizes_long_term_row_with_prior_values(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """'Deleting' a long-term row with a prior row should overwrite it
+        with the prior's values rather than removing it (HA expects
+        continuous hourly rows)."""
+        _, stat_meta_id, _ = sample_entity
+        _add_long_term(
+            db_session, stat_meta_id, start_ts=3600.0,
+            mean=5.0, min=4.0, max=6.0, state=5.5, sum=50.0,
+        )
+        row = _add_long_term(
+            db_session, stat_meta_id, start_ts=7200.0,
+            mean=999.0, min=999.0, max=999.0, state=999.0, sum=999.0,
+        )
+        row_id = row.id
+
+        result = delete_statistic_sync(mock_hass, row_id, statistic_type="long_term")
+
+        assert result["success"] is True
+        assert result["id"] == row_id
+        assert result["action"] == "neutralized"
+        db_session.expire_all()
+        reloaded = db_session.get(Statistics, row_id)
+        assert reloaded is not None
+        assert reloaded.mean == 5.0
+        assert reloaded.state == 5.5
+        assert reloaded.sum == 50.0
+
+    def test_actually_deletes_first_long_term_row_with_no_prior(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """When the target is the very first row (no prior), there's nothing
+        to carry forward — actually remove it."""
         _, stat_meta_id, _ = sample_entity
         row = _add_long_term(db_session, stat_meta_id, start_ts=3600.0, state=1.0)
         row_id = row.id
@@ -284,14 +317,18 @@ class TestDeleteStatisticSync:
         result = delete_statistic_sync(mock_hass, row_id, statistic_type="long_term")
 
         assert result["success"] is True
-        assert result["id"] == row_id
+        assert result["action"] == "deleted"
         db_session.expire_all()
         assert db_session.get(Statistics, row_id) is None
 
-    def test_deletes_short_term_row_when_no_source_data(
+    def test_neutralizes_short_term_row_when_no_source_data(
         self, db_session, mock_hass, sample_entity,
     ):
         _, stat_meta_id, _ = sample_entity
+        prior = _add_short_term(
+            db_session, stat_meta_id, start_ts=3600.0 * 100 - 300,
+            state=2.0, mean=2.0, min=2.0, max=2.0,
+        )
         row = _add_short_term(
             db_session, stat_meta_id, start_ts=3600.0 * 100, state=1.0,
         )
@@ -302,8 +339,12 @@ class TestDeleteStatisticSync:
         )
 
         assert result["success"] is True
+        assert result["action"] == "neutralized"
         db_session.expire_all()
-        assert db_session.get(StatisticsShortTerm, row_id) is None
+        reloaded = db_session.get(StatisticsShortTerm, row_id)
+        assert reloaded is not None
+        assert reloaded.state == 2.0
+        assert reloaded.mean == 2.0
 
     def test_returns_error_when_id_not_found(self, db_session, mock_hass):
         result = delete_statistic_sync(
@@ -350,11 +391,11 @@ class TestDeleteStatisticSync:
         db_session.expire_all()
         assert db_session.get(Statistics, row.id) is not None
 
-    def test_short_term_delete_cascades_to_long_term(
+    def test_short_term_delete_cascades_to_long_term_no_prior(
         self, db_session, mock_hass, sample_entity,
     ):
-        """Deleting the only short-term row in an hour should update the
-        containing long-term row (via recalculate_long_term_stat fallback)."""
+        """Neutralizing the only short-term row when there's no prior should
+        actually delete it, and the long-term row should be removed too."""
         _, stat_meta_id, _ = sample_entity
         hour_start = 3600.0 * 100
         short = _add_short_term(
@@ -370,22 +411,64 @@ class TestDeleteStatisticSync:
         )
 
         assert result["success"] is True
+        assert result["action"] == "deleted"
         db_session.expire_all()
         # With no prior short-term, the long-term row is removed by the fallback
         assert db_session.get(Statistics, long_id) is None
 
-    def test_delete_one_short_term_with_siblings_recomputes_long_term(
+    def test_short_term_delete_cascades_to_long_term_with_prior(
         self, db_session, mock_hass, sample_entity,
     ):
-        """Deleting a *wrong* short-term row when other short-term rows in the
-        same hour remain → long-term re-aggregates from the surviving rows.
+        """Neutralizing a short-term row that has a prior should keep the row
+        with carried-forward values, and the long-term should re-aggregate."""
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        prior = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start - 300,
+            mean=3.0, min=3.0, max=3.0, state=3.0,
+        )
+        short = _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=999.0, min=999.0, max=999.0, state=999.0,
+        )
+        long_row = _add_long_term(
+            db_session, stat_meta_id, start_ts=hour_start,
+            mean=999.0, min=999.0, max=999.0, state=999.0,
+        )
+        short_id, long_id = short.id, long_row.id
 
-        This is the user-facing flow: 'I see a bad spike in 5-min stats; I
-        delete that one row; the hourly graph should now ignore it'.
+        result = delete_statistic_sync(
+            mock_hass, short_id, statistic_type="short_term",
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "neutralized"
+        db_session.expire_all()
+        # Short-term row preserved with prior's values
+        reloaded = db_session.get(StatisticsShortTerm, short_id)
+        assert reloaded is not None
+        assert reloaded.mean == 3.0
+        assert reloaded.state == 3.0
+        # Long-term re-aggregated — now reflects the neutralized value
+        reloaded_long = db_session.get(Statistics, long_id)
+        assert reloaded_long is not None
+        assert reloaded_long.mean == 3.0
+
+    def test_delete_one_short_term_with_siblings_neutralizes_and_recomputes(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """'Deleting' a wrong short-term row when siblings exist should
+        neutralize the bad row (overwrite with the prior row's values),
+        then re-aggregate the long-term row from all four (now-corrected)
+        short-term rows.
+
+        User flow: 'I see a spike at 999 in 5-min stats; I delete it;
+        that row now shows the prior value (10) and the hourly average
+        drops from ~270 to ~22.5.'
         """
         _, stat_meta_id, _ = sample_entity
         hour_start = 3600.0 * 100
-        # Four short-term rows in this hour: 10, 999 (the wrong one), 30, 40
+        # Four short-term rows: 10, 999 (bad), 30, 40
         good_a = _add_short_term(
             db_session, stat_meta_id, start_ts=hour_start,
             mean=10.0, min=10.0, max=10.0, state=10.0,
@@ -402,7 +485,6 @@ class TestDeleteStatisticSync:
             db_session, stat_meta_id, start_ts=hour_start + 900,
             mean=40.0, min=40.0, max=40.0, state=40.0,
         )
-        # Long-term reflects the average of all four — including the bad value
         long_row = _add_long_term(
             db_session, stat_meta_id, start_ts=hour_start,
             mean=(10.0 + 999.0 + 30.0 + 40.0) / 4,
@@ -417,19 +499,24 @@ class TestDeleteStatisticSync:
         )
 
         assert result["success"] is True
+        assert result["action"] == "neutralized"
         db_session.expire_all()
-        # Only the bad row removed; siblings untouched
-        assert db_session.get(StatisticsShortTerm, bad_id) is None
+        # Bad row still exists but now carries good_a's values
+        neutralized = db_session.get(StatisticsShortTerm, bad_id)
+        assert neutralized is not None
+        assert neutralized.mean == 10.0
+        assert neutralized.state == 10.0
+        # Siblings untouched
         assert db_session.get(StatisticsShortTerm, good_a_id) is not None
         assert db_session.get(StatisticsShortTerm, good_b_id) is not None
         assert db_session.get(StatisticsShortTerm, good_c_id) is not None
-        # Long-term re-aggregated from the surviving 3 rows
+        # Long-term re-aggregated from all 4 rows (bad now = 10)
+        # avg(10, 10, 30, 40) = 22.5
         reloaded_long = db_session.get(Statistics, long_id)
         assert reloaded_long is not None
-        assert reloaded_long.mean == pytest.approx((10.0 + 30.0 + 40.0) / 3)
+        assert reloaded_long.mean == pytest.approx((10.0 + 10.0 + 30.0 + 40.0) / 4)
         assert reloaded_long.min == 10.0
         assert reloaded_long.max == 40.0
-        # state = last surviving short-term's state
         assert reloaded_long.state == 40.0
 
     def test_update_one_short_term_with_siblings_recomputes_long_term(

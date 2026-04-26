@@ -1,0 +1,49 @@
+{
+  "title": "Editor de historial",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Editor de historial",
+        "description": "Este componente permite editar registros del historial y estadísticas de la base de datos."
+      }
+    }
+  },
+  "services": {
+    "get_records": {
+      "name": "Obtener registros del historial",
+      "description": "Recupera registros del historial de una entidad desde la base de datos."
+    },
+    "update_record": {
+      "name": "Actualizar registro del historial",
+      "description": "Actualiza un registro del historial existente en la base de datos."
+    },
+    "delete_record": {
+      "name": "Eliminar registro del historial",
+      "description": "Elimina un registro del historial de la base de datos."
+    },
+    "create_record": {
+      "name": "Crear registro del historial",
+      "description": "Crea un nuevo registro del historial en la base de datos."
+    },
+    "recalculate_statistics": {
+      "name": "Recalcular estadísticas",
+      "description": "Fuerza el recálculo de estadísticas a corto y/o largo plazo de una entidad en un rango de tiempo determinado."
+    },
+    "bulk_update_record": {
+      "name": "Actualización masiva de registros",
+      "description": "Aplica los mismos cambios a múltiples registros del historial en una sola transacción."
+    },
+    "bulk_delete_record": {
+      "name": "Eliminación masiva de registros",
+      "description": "Elimina múltiples registros del historial en una sola transacción."
+    },
+    "bulk_update_statistic": {
+      "name": "Actualización masiva de estadísticas",
+      "description": "Aplica los mismos valores a múltiples filas de estadísticas."
+    },
+    "bulk_delete_statistic": {
+      "name": "Eliminación masiva de estadísticas",
+      "description": "Neutraliza múltiples filas de estadísticas sobrescribiéndolas con los valores del período anterior."
+    }
+  }
+}

@@ -1,7 +1,6 @@
 """History Editor component for Home Assistant."""
 import json
 import logging
-import homeassistant.helpers.config_validation as cv
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -17,7 +16,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-CONFIG_SCHEMA = cv.config_entry_only_config_schema
+DOMAIN = "history_editor"
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: vol.Schema({})},
+    extra=vol.ALLOW_EXTRA,
+)
 
 # Import recorder statistics events for cache invalidation signalling.
 # Fall back to the string literals for HA versions that predate the constants.
@@ -46,8 +49,6 @@ from .statistics import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-DOMAIN = "history_editor"
 
 # Service names
 SERVICE_GET_RECORDS = "get_records"

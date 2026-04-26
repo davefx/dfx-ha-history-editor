@@ -202,13 +202,88 @@ class HistoryEditorPanel extends HTMLElement {
     if (!this._initialized) {
       this._debugLog('[HistoryEditor] Initializing panel for the first time');
       this._initialized = true;
-      this.renderPanel();
-    } else if (!this.querySelector('#records-display')) {
+      if (this._needsWarning()) {
+        this._showWarning();
+      } else {
+        this.renderPanel();
+      }
+    } else if (!this.querySelector('#records-display') && !this.querySelector('#warning-screen')) {
       // Panel was previously initialized but DOM was cleared (e.g. after HA reconnection)
       this._debugLog('[HistoryEditor] Panel DOM was cleared, re-initializing');
       this._entityFormInitialized = false;
       this.renderPanel();
     }
+  }
+
+  _needsWarning() {
+    return localStorage.getItem('history_editor_warning_accepted') !== 'true';
+  }
+
+  _showWarning() {
+    this.style.display = 'flex';
+    this.style.flexDirection = 'column';
+    this.style.height = '100%';
+    this.style.overflow = 'hidden';
+    this.style.boxSizing = 'border-box';
+    this.style.padding = '16px';
+    this.style.background = 'var(--primary-background-color)';
+    this.style.color = 'var(--primary-text-color)';
+
+    this.innerHTML = `
+      <style>
+        .warning-screen {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          text-align: center;
+          gap: 24px;
+          padding: 32px;
+        }
+        .warning-icon { font-size: 64px; }
+        .warning-title {
+          font-size: 22px;
+          font-weight: 600;
+          color: var(--error-color, #db4437);
+        }
+        .warning-text {
+          font-size: 15px;
+          max-width: 520px;
+          line-height: 1.6;
+          color: var(--secondary-text-color);
+        }
+        .warning-proceed {
+          padding: 12px 32px;
+          border-radius: 6px;
+          border: none;
+          background: var(--primary-color);
+          color: var(--text-primary-color, white);
+          font-size: 15px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+        .warning-proceed:hover {
+          opacity: 0.9;
+        }
+      </style>
+      <div id="warning-screen" class="warning-screen">
+        <div class="warning-icon">&#x1F409;</div>
+        <div class="warning-title">Here be dragons!</div>
+        <div class="warning-text">
+          This tool directly edits your Home Assistant database &mdash;
+          state history, short-term statistics, and long-term statistics.<br><br>
+          You could easily break your data if you don&rsquo;t know what you are doing.
+          <strong>Always back up your database before making changes.</strong>
+        </div>
+        <button class="warning-proceed" id="warning-accept-btn">I know what I&rsquo;m doing. Proceed.</button>
+      </div>
+    `;
+
+    this.querySelector('#warning-accept-btn').addEventListener('click', () => {
+      localStorage.setItem('history_editor_warning_accepted', 'true');
+      this.renderPanel();
+    });
   }
 
   _updateDebugStatus(key, value, statusClass = '') {

@@ -121,6 +121,10 @@ const _FALLBACK_EN = {
     not_found: '{n} id(s) not found.',
     stats_stale: 'Statistics may be stale — call history_editor.recalculate_statistics to fix.',
     see_change: 'To see the change in HA graphs, navigate away and back, or reload the browser tab.',
+    // Chart
+    chart_earlier: 'Earlier',
+    chart_earlier_title: 'Load 3 more months of history',
+    chart_no_more: 'No earlier data available',
     // Empty states
     no_records: 'No records found',
     no_statistics: 'No statistics records found',
@@ -266,6 +270,10 @@ class HistoryEditorPanel extends HTMLElement {
       clearTimeout(this._autoLoadCooldownTimer);
       this._autoLoadCooldownTimer = null;
     }
+    if (this._chartResizeHandler) {
+      window.removeEventListener('resize', this._chartResizeHandler);
+      this._chartResizeHandler = null;
+    }
   }
 
   set hass(hass) {
@@ -347,12 +355,15 @@ class HistoryEditorPanel extends HTMLElement {
         this._debugLog('[HistoryEditor] Selected entity:', this.selectedEntity);
         // Automatically load records when entity is selected
         this.loadRecords();
+        this._loadChart(newEntity);
       } else {
         // Handle case where entity is cleared
         this.selectedEntity = null;
         this.records = [];
         if (this._clearSelection) this._clearSelection();
         this.displayRecords([]);
+        const chartEl = this.querySelector('#chart-container');
+        if (chartEl) chartEl.style.display = 'none';
         this._debugLog('[HistoryEditor] Entity selection cleared');
       }
     });
@@ -772,6 +783,66 @@ class HistoryEditorPanel extends HTMLElement {
         .debug-status .status-warning {
           color: var(--warning-color, orange);
         }
+        /* Overview chart */
+        .chart-container {
+          position: relative;
+          width: 100%;
+          height: 180px;
+          margin-bottom: 12px;
+          background: var(--card-background-color);
+          border-radius: 6px;
+          border: 1px solid var(--divider-color);
+          cursor: crosshair;
+        }
+        .chart-container canvas {
+          width: 100%;
+          height: 100%;
+        }
+        .chart-tooltip {
+          position: absolute;
+          pointer-events: none;
+          background: var(--primary-color);
+          color: var(--text-primary-color, white);
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          white-space: nowrap;
+          transform: translate(-50%, -110%);
+          display: none;
+          z-index: 10;
+        }
+        .chart-earlier-btn {
+          position: absolute;
+          top: 4px;
+          left: 4px;
+          z-index: 5;
+          padding: 3px 10px;
+          font-size: 11px;
+          border-radius: 4px;
+          border: 1px solid var(--divider-color);
+          background: var(--card-background-color);
+          color: var(--primary-text-color);
+          cursor: pointer;
+          opacity: 0.8;
+        }
+        .chart-earlier-btn:hover {
+          opacity: 1;
+          background: var(--primary-color);
+          color: var(--text-primary-color, white);
+          border-color: var(--primary-color);
+        }
+        .chart-earlier-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .chart-empty {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          color: var(--secondary-text-color);
+          font-size: 13px;
+        }
         .scroll-sentinel {
           height: 1px;
         }
@@ -918,6 +989,12 @@ class HistoryEditorPanel extends HTMLElement {
         <button id="add-btn" class="secondary">${this._t('add_new')}</button>
         <button id="scroll-top-btn" class="secondary" title="${this._t('scroll_top_title')}">${this._t('scroll_top')}</button>
         <button id="scroll-bottom-btn" class="secondary" title="${this._t('scroll_bottom_title')}">${this._t('scroll_bottom')}</button>
+      </div>
+
+      <div id="chart-container" class="chart-container" style="display:none">
+        <button id="chart-earlier-btn" class="chart-earlier-btn" type="button" title="${this._t('chart_earlier_title')}">← ${this._t('chart_earlier')}</button>
+        <canvas id="overview-chart"></canvas>
+        <div id="chart-tooltip" class="chart-tooltip"></div>
       </div>
 
       <div id="bulk-action-bar" class="bulk-action-bar" style="display:none">
@@ -1117,6 +1194,25 @@ class HistoryEditorPanel extends HTMLElement {
     if (bulkEditBtn) bulkEditBtn.addEventListener('click', () => this._openBulkEditModal());
     if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', () => this._handleBulkDelete());
     if (bulkClearBtn) bulkClearBtn.addEventListener('click', () => this._clearSelection());
+
+    // Overview chart interaction
+    const chartContainer = this.querySelector('#chart-container');
+    if (chartContainer) {
+      chartContainer.addEventListener('mousemove', (e) => this._onChartHover(e));
+      chartContainer.addEventListener('mouseleave', () => {
+        const tt = this.querySelector('#chart-tooltip');
+        if (tt) tt.style.display = 'none';
+      });
+      chartContainer.addEventListener('click', (e) => {
+        if (e.target.id !== 'chart-earlier-btn') this._onChartClick(e);
+      });
+    }
+    const chartEarlierBtn = this.querySelector('#chart-earlier-btn');
+    if (chartEarlierBtn) {
+      chartEarlierBtn.addEventListener('click', () => this._loadEarlierChart());
+    }
+    this._chartResizeHandler = () => { if (this._chartPoints) this._renderChart(); };
+    window.addEventListener('resize', this._chartResizeHandler);
     
     // Set up ha-form if hass is available
     if (this._hass) {
@@ -1998,6 +2094,280 @@ class HistoryEditorPanel extends HTMLElement {
     lines.push('');
     lines.push(this._t('see_change'));
     return lines.join('\n');
+  }
+
+  // ─── Overview chart ────────────────────────────────────────────────────────
+
+  async _loadChart(entityId) {
+    const container = this.querySelector('#chart-container');
+    if (!container) return;
+
+    // Reset chart state for this entity
+    this._chartPoints = [];
+    this._chartEntity = entityId;
+    this._chartHasMore = true;
+
+    // Load last 3 months
+    const now = new Date();
+    const threeMonthsAgo = new Date(now);
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    this._chartOldestLoaded = threeMonthsAgo;
+
+    await this._fetchChartRange(entityId, threeMonthsAgo, now);
+  }
+
+  async _loadEarlierChart() {
+    if (!this._chartEntity || !this._chartHasMore) return;
+    const btn = this.querySelector('#chart-earlier-btn');
+    if (btn) btn.disabled = true;
+
+    const endDate = new Date(this._chartOldestLoaded);
+    const startDate = new Date(endDate);
+    startDate.setMonth(startDate.getMonth() - 3);
+    this._chartOldestLoaded = startDate;
+
+    await this._fetchChartRange(this._chartEntity, startDate, endDate, true);
+    if (btn) btn.disabled = false;
+  }
+
+  async _fetchChartRange(entityId, startDate, endDate, prepend = false) {
+    const container = this.querySelector('#chart-container');
+    if (!container) return;
+
+    try {
+      const startISO = startDate.toISOString();
+      const endISO = endDate.toISOString();
+      const url = `/api/history_editor/statistics?entity_id=${encodeURIComponent(entityId)}`
+        + `&statistic_type=long_term&limit=100000`
+        + `&start_time=${encodeURIComponent(startISO)}`
+        + `&end_time=${encodeURIComponent(endISO)}`;
+
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${this._hass.auth.data.access_token}` },
+      });
+      const result = await response.json();
+
+      const newPoints = (result.success && result.records ? result.records : [])
+        .reverse()
+        .map((r) => ({
+          ts: new Date(r.start).getTime(),
+          mean: r.mean,
+          min: r.min,
+          max: r.max,
+          state: r.state,
+          start: r.start,
+        }))
+        .filter((p) => p.mean !== null && p.mean !== undefined);
+
+      if (prepend) {
+        if (newPoints.length === 0) {
+          this._chartHasMore = false;
+          const btn = this.querySelector('#chart-earlier-btn');
+          if (btn) {
+            btn.textContent = this._t('chart_no_more');
+            btn.disabled = true;
+          }
+        }
+        // Prepend, avoiding duplicates by timestamp
+        const existingTs = new Set(this._chartPoints.map((p) => p.ts));
+        const unique = newPoints.filter((p) => !existingTs.has(p.ts));
+        this._chartPoints = [...unique, ...this._chartPoints];
+      } else {
+        this._chartPoints = newPoints;
+      }
+
+      if (this._chartPoints.length < 2) {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.style.display = '';
+      this._renderChart();
+    } catch (err) {
+      console.error('[HistoryEditor] Chart load error:', err);
+      if (!prepend) container.style.display = 'none';
+    }
+  }
+
+  _renderChart() {
+    const canvas = this.querySelector('#overview-chart');
+    const container = this.querySelector('#chart-container');
+    if (!canvas || !container || !this._chartPoints || this._chartPoints.length < 2) return;
+
+    const points = this._chartPoints;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    const W = rect.width;
+    const H = rect.height;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // Compute bounds
+    const pad = { top: 16, right: 16, bottom: 28, left: 52 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+
+    const tsMin = points[0].ts;
+    const tsMax = points[points.length - 1].ts;
+    const tsRange = tsMax - tsMin || 1;
+
+    let yVals = points.map((p) => p.mean);
+    if (points[0].min !== null && points[0].min !== undefined) {
+      yVals = yVals.concat(points.map((p) => p.min)).concat(points.map((p) => p.max));
+    }
+    yVals = yVals.filter((v) => v !== null && v !== undefined);
+    let yMin = Math.min(...yVals);
+    let yMax = Math.max(...yVals);
+    if (yMin === yMax) { yMin -= 1; yMax += 1; }
+    const yPad = (yMax - yMin) * 0.08;
+    yMin -= yPad;
+    yMax += yPad;
+    const yRange = yMax - yMin || 1;
+
+    const xOf = (ts) => pad.left + ((ts - tsMin) / tsRange) * plotW;
+    const yOf = (v) => pad.top + (1 - (v - yMin) / yRange) * plotH;
+
+    // Clear
+    ctx.clearRect(0, 0, W, H);
+
+    // Styles from HA theme
+    const textColor = getComputedStyle(this).getPropertyValue('--secondary-text-color').trim() || '#888';
+    const lineColor = getComputedStyle(this).getPropertyValue('--primary-color').trim() || '#4285f4';
+    const bandColor = lineColor + '18';
+    const gridColor = getComputedStyle(this).getPropertyValue('--divider-color').trim() || '#e0e0e0';
+
+    // Y grid + labels
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = yMin + (yRange * i) / yTicks;
+      const y = yOf(v);
+      ctx.strokeStyle = gridColor;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(W - pad.right, y);
+      ctx.stroke();
+      ctx.fillStyle = textColor;
+      ctx.fillText(this._chartFmtNum(v), pad.left - 6, y);
+    }
+
+    // X labels
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const xLabelCount = Math.min(8, Math.floor(plotW / 80));
+    for (let i = 0; i <= xLabelCount; i++) {
+      const ts = tsMin + (tsRange * i) / xLabelCount;
+      const x = xOf(ts);
+      const d = new Date(ts);
+      const label = d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+      ctx.fillStyle = textColor;
+      ctx.fillText(label, x, H - pad.bottom + 6);
+    }
+
+    // Min/max band
+    const hasMinMax = points[0].min !== null && points[0].min !== undefined;
+    if (hasMinMax) {
+      ctx.beginPath();
+      points.forEach((p, i) => {
+        const x = xOf(p.ts);
+        if (i === 0) ctx.moveTo(x, yOf(p.max)); else ctx.lineTo(x, yOf(p.max));
+      });
+      for (let i = points.length - 1; i >= 0; i--) {
+        ctx.lineTo(xOf(points[i].ts), yOf(points[i].min));
+      }
+      ctx.closePath();
+      ctx.fillStyle = bandColor;
+      ctx.fill();
+    }
+
+    // Mean line
+    ctx.beginPath();
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    points.forEach((p, i) => {
+      const x = xOf(p.ts);
+      const y = yOf(p.mean);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Store layout for hover
+    this._chartLayout = { pad, plotW, plotH, tsMin, tsRange, yMin, yRange, W, H, xOf, yOf };
+  }
+
+  _chartFmtNum(v) {
+    if (Math.abs(v) >= 10000) return v.toFixed(0);
+    if (Math.abs(v) >= 100) return v.toFixed(1);
+    if (Math.abs(v) >= 1) return v.toFixed(2);
+    return v.toFixed(3);
+  }
+
+  _onChartHover(e) {
+    const container = this.querySelector('#chart-container');
+    const tooltip = this.querySelector('#chart-tooltip');
+    if (!container || !tooltip || !this._chartPoints || !this._chartLayout) return;
+
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const { pad, plotW, tsMin, tsRange } = this._chartLayout;
+
+    if (mx < pad.left || mx > pad.left + plotW) {
+      tooltip.style.display = 'none';
+      return;
+    }
+
+    const ts = tsMin + ((mx - pad.left) / plotW) * tsRange;
+    // Find nearest point
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < this._chartPoints.length; i++) {
+      const d = Math.abs(this._chartPoints[i].ts - ts);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    const p = this._chartPoints[best];
+    const x = this._chartLayout.xOf(p.ts);
+    const y = this._chartLayout.yOf(p.mean);
+
+    const d = new Date(p.ts);
+    const dateStr = d.toLocaleString();
+    tooltip.textContent = `${dateStr}  —  ${this._chartFmtNum(p.mean)}`;
+    tooltip.style.left = x + 'px';
+    tooltip.style.top = y + 'px';
+    tooltip.style.display = '';
+  }
+
+  _onChartClick(e) {
+    if (!this._chartPoints || !this._chartLayout) return;
+    const container = this.querySelector('#chart-container');
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const { pad, plotW, tsMin, tsRange } = this._chartLayout;
+    if (mx < pad.left || mx > pad.left + plotW) return;
+
+    const ts = tsMin + ((mx - pad.left) / plotW) * tsRange;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < this._chartPoints.length; i++) {
+      const d = Math.abs(this._chartPoints[i].ts - ts);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    const p = this._chartPoints[best];
+
+    // Set the go-to-date field and trigger a load
+    const dateInput = this.querySelector('#go-to-date');
+    if (dateInput) {
+      const d = new Date(p.ts);
+      const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      dateInput.value = iso;
+      this.goToDate = iso;
+      this.loadRecords();
+    }
   }
 
   // ─── Infinite scroll helpers ──────────────────────────────────────────────

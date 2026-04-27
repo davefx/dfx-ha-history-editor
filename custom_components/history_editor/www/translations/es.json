@@ -103,5 +103,8 @@
   "warning_title": "¡Aquí hay dragones!",
   "warning_text": "Esta herramienta edita directamente tu base de datos de Home Assistant — historial de estados, estadísticas a corto plazo y estadísticas a largo plazo.<br><br>Podrías romper fácilmente tus datos si no sabes lo que estás haciendo. <strong>Haz siempre una copia de seguridad de tu base de datos antes de hacer cambios.</strong>",
   "warning_proceed": "Sé lo que hago. Continuar.",
-  "na": "N/D"
+  "na": "N/D",
+  "chart_earlier": "Anterior",
+  "chart_earlier_title": "Cargar 3 meses más de historial",
+  "chart_no_more": "No hay datos anteriores disponibles"
 }

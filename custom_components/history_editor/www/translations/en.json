@@ -103,5 +103,8 @@
   "warning_title": "Here be dragons!",
   "warning_text": "This tool directly edits your Home Assistant database — state history, short-term statistics, and long-term statistics.<br><br>You could easily break your data if you don’t know what you are doing. <strong>Always back up your database before making changes.</strong>",
   "warning_proceed": "I know what I’m doing. Proceed.",
-  "na": "N/A"
+  "na": "N/A",
+  "chart_earlier": "Earlier",
+  "chart_earlier_title": "Load 3 more months of history",
+  "chart_no_more": "No earlier data available"
 }

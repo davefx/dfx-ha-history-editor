@@ -1,14 +1,246 @@
+const _TRANSLATIONS = {
+  en: {
+    // Header & controls
+    title: 'History Editor',
+    data_source: 'Data Source',
+    states: 'State History',
+    statistics_long: 'Statistics (Long-term, hourly)',
+    statistics_short: 'Statistics (Short-term, 5 min)',
+    record_limit: 'Record Limit',
+    go_to_date: 'Go to Date/Time',
+    go_to_date_title: 'Jump to records from this date',
+    go_to_btn: 'Go to Date',
+    clear_date: 'Clear Date',
+    add_new: 'Add New Record',
+    scroll_top: '⬆ Top',
+    scroll_top_title: 'Go to the first (most recent) records',
+    scroll_bottom: '⬇ Bottom',
+    scroll_bottom_title: 'Go to the last (oldest) records',
+    select_date_first: 'Please select a date and time first',
+    // Table headers
+    th_id: 'ID',
+    th_state: 'State',
+    th_attributes: 'Attributes',
+    th_timestamp: 'Timestamp',
+    th_actions: 'Actions',
+    th_start_time: 'Start Time',
+    th_mean: 'Mean',
+    th_min: 'Min',
+    th_max: 'Max',
+    th_sum: 'Sum',
+    select_all: 'Select all visible',
+    select_all_unlocked: 'Select all unlocked visible rows',
+    // Actions
+    edit: 'Edit',
+    delete: 'Delete',
+    save: 'Save',
+    cancel: 'Cancel',
+    // Bulk
+    n_selected: '{n} selected',
+    edit_selected: 'Edit Selected',
+    delete_selected: 'Delete Selected',
+    clear_selection: 'Clear',
+    // Modal
+    add_new_title: 'Add New Record',
+    edit_record_title: 'Edit Record',
+    edit_statistic_title: 'Edit Statistic',
+    state_id_label: 'State ID',
+    statistic_id_label: 'Statistic ID',
+    entity_id_label: 'Entity ID',
+    state_label: 'State',
+    attributes_label: 'Attributes (JSON)',
+    timestamp_label: 'Timestamp',
+    start_time_label: 'Start Time',
+    mean_label: 'Mean',
+    min_label: 'Min',
+    max_label: 'Max',
+    sum_label: 'Sum',
+    state_last_label: 'State (last)',
+    // Bulk modal
+    bulk_edit_states: 'Bulk Edit ({n} state records)',
+    bulk_edit_short: 'Bulk Edit ({n} short-term stats)',
+    bulk_edit_long: 'Bulk Edit ({n} long-term stats)',
+    bulk_editing: 'Editing {n} selected record(s).',
+    bulk_help: 'Leave a field empty to keep the current value on each selected record.',
+    bulk_provide_state_or_attrs: 'Provide a new state value or new attributes (or both) before saving.',
+    bulk_provide_numeric: 'Provide at least one numeric value (mean, min, max, sum, state) before saving.',
+    // Alerts
+    invalid_json: 'Invalid JSON in attributes field',
+    invalid_json_detail: 'Attributes must be valid JSON: {err}',
+    record_created: 'Record created successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.',
+    record_updated: 'Record updated successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.',
+    record_deleted: 'Record deleted successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.',
+    stat_updated: 'Statistic updated successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.',
+    stat_deleted: 'Statistic deleted successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.',
+    error_creating: 'Error creating record: {err}',
+    error_updating: 'Error updating record: {err}',
+    error_deleting: 'Error deleting record: {err}',
+    error_saving: 'Error saving record: {err}',
+    error_saving_stat: 'Error saving statistic: {err}',
+    error_updating_stat: 'Error updating statistic: {err}',
+    error_deleting_stat: 'Error deleting statistic: {err}',
+    error_loading: 'Error loading records: {err}',
+    error_loading_stats: 'Error loading statistics: {err}',
+    failed_load: 'Failed to load records: {err}',
+    failed_load_stats: 'Failed to load statistics: {err}',
+    error_console: 'Error loading records. Please check the console for details.',
+    error_console_stats: 'Error loading statistics. Please check the console for details.',
+    // Delete confirmation
+    confirm_delete: 'Are you sure you want to delete this record?',
+    confirm_delete_stat: 'Are you sure you want to delete this statistic?',
+    // Bulk delete
+    bulk_delete_confirm_states: 'Delete {n} state record(s)?\n\nThis cannot be undone. Affected statistics periods will be recalculated.',
+    bulk_delete_confirm_stats: 'Delete {n} statistics row(s)?\n\nThis cannot be undone. Rows blocked by the source-data guard will be skipped and reported.',
+    bulk_delete_error: 'Error: {err}',
+    bulk_delete_failed: 'Bulk delete failed: {err}',
+    bulk_update_error: 'Error: {err}',
+    bulk_update_failed: 'Bulk update failed: {err}',
+    // Bulk result
+    n_records_updated: '{n} record(s) updated.',
+    n_records_deleted: '{n} record(s) deleted.',
+    blocked_header: '{n} blocked by source-data guard:',
+    blocked_item: '  • id={id}: {reason}',
+    blocked_more: '  • …and {n} more',
+    not_found: '{n} id(s) not found.',
+    stats_stale: 'Statistics may be stale — call history_editor.recalculate_statistics to fix.',
+    see_change: 'To see the change in HA graphs, navigate away and back, or reload the browser tab.',
+    // Empty states
+    no_records: 'No records found',
+    no_statistics: 'No statistics records found',
+    // Pagination
+    load_prev: '↑ Scroll up or click to load earlier records',
+    loading_more: '⟳ Loading more records...',
+    // Locked rows
+    locked_state_history: 'State history exists for this period — edit state history instead',
+    locked_short_term: 'Short-term statistics exist for this period — edit short-term statistics instead',
+    // Warning screen
+    warning_icon: '🐉',
+    warning_title: 'Here be dragons!',
+    warning_text: 'This tool directly edits your Home Assistant database — state history, short-term statistics, and long-term statistics.<br><br>You could easily break your data if you don\'t know what you are doing. <strong>Always back up your database before making changes.</strong>',
+    warning_proceed: 'I know what I\'m doing. Proceed.',
+    na: 'N/A',
+  },
+  es: {
+    title: 'Editor de historial',
+    data_source: 'Fuente de datos',
+    states: 'Historial de estados',
+    statistics_long: 'Estadísticas (largo plazo, horarias)',
+    statistics_short: 'Estadísticas (corto plazo, 5 min)',
+    record_limit: 'Límite de registros',
+    go_to_date: 'Ir a fecha/hora',
+    go_to_date_title: 'Saltar a registros desde esta fecha',
+    go_to_btn: 'Ir a fecha',
+    clear_date: 'Borrar fecha',
+    add_new: 'Añadir registro',
+    scroll_top: '⬆ Inicio',
+    scroll_top_title: 'Ir a los primeros registros (más recientes)',
+    scroll_bottom: '⬇ Final',
+    scroll_bottom_title: 'Ir a los últimos registros (más antiguos)',
+    select_date_first: 'Por favor, selecciona una fecha y hora primero',
+    th_id: 'ID',
+    th_state: 'Estado',
+    th_attributes: 'Atributos',
+    th_timestamp: 'Marca temporal',
+    th_actions: 'Acciones',
+    th_start_time: 'Hora de inicio',
+    th_mean: 'Media',
+    th_min: 'Mín',
+    th_max: 'Máx',
+    th_sum: 'Suma',
+    select_all: 'Seleccionar todos los visibles',
+    select_all_unlocked: 'Seleccionar todos los desbloqueados visibles',
+    edit: 'Editar',
+    delete: 'Eliminar',
+    save: 'Guardar',
+    cancel: 'Cancelar',
+    n_selected: '{n} seleccionados',
+    edit_selected: 'Editar selección',
+    delete_selected: 'Eliminar selección',
+    clear_selection: 'Limpiar',
+    add_new_title: 'Añadir nuevo registro',
+    edit_record_title: 'Editar registro',
+    edit_statistic_title: 'Editar estadística',
+    state_id_label: 'ID de estado',
+    statistic_id_label: 'ID de estadística',
+    entity_id_label: 'ID de entidad',
+    state_label: 'Estado',
+    attributes_label: 'Atributos (JSON)',
+    timestamp_label: 'Marca temporal',
+    start_time_label: 'Hora de inicio',
+    mean_label: 'Media',
+    min_label: 'Mín',
+    max_label: 'Máx',
+    sum_label: 'Suma',
+    state_last_label: 'Estado (último)',
+    bulk_edit_states: 'Edición masiva ({n} registros de estado)',
+    bulk_edit_short: 'Edición masiva ({n} estadísticas corto plazo)',
+    bulk_edit_long: 'Edición masiva ({n} estadísticas largo plazo)',
+    bulk_editing: 'Editando {n} registro(s) seleccionados.',
+    bulk_help: 'Deja un campo vacío para mantener el valor actual en cada registro seleccionado.',
+    bulk_provide_state_or_attrs: 'Proporciona un nuevo valor de estado o nuevos atributos (o ambos) antes de guardar.',
+    bulk_provide_numeric: 'Proporciona al menos un valor numérico (media, mín, máx, suma, estado) antes de guardar.',
+    invalid_json: 'JSON no válido en el campo de atributos',
+    invalid_json_detail: 'Los atributos deben ser JSON válido: {err}',
+    record_created: 'Registro creado correctamente.\n\nPara ver el cambio en los gráficos y paneles de estadísticas de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    record_updated: 'Registro actualizado correctamente.\n\nPara ver el cambio en los gráficos y paneles de estadísticas de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    record_deleted: 'Registro eliminado correctamente.\n\nPara ver el cambio en los gráficos y paneles de estadísticas de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    stat_updated: 'Estadística actualizada correctamente.\n\nPara ver el cambio en los gráficos de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    stat_deleted: 'Estadística eliminada correctamente.\n\nPara ver el cambio en los gráficos de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    error_creating: 'Error al crear el registro: {err}',
+    error_updating: 'Error al actualizar el registro: {err}',
+    error_deleting: 'Error al eliminar el registro: {err}',
+    error_saving: 'Error al guardar el registro: {err}',
+    error_saving_stat: 'Error al guardar la estadística: {err}',
+    error_updating_stat: 'Error al actualizar la estadística: {err}',
+    error_deleting_stat: 'Error al eliminar la estadística: {err}',
+    error_loading: 'Error al cargar registros: {err}',
+    error_loading_stats: 'Error al cargar estadísticas: {err}',
+    failed_load: 'Error al cargar registros: {err}',
+    failed_load_stats: 'Error al cargar estadísticas: {err}',
+    error_console: 'Error al cargar registros. Revisa la consola para más detalles.',
+    error_console_stats: 'Error al cargar estadísticas. Revisa la consola para más detalles.',
+    confirm_delete: '¿Estás seguro de que quieres eliminar este registro?',
+    confirm_delete_stat: '¿Estás seguro de que quieres eliminar esta estadística?',
+    bulk_delete_confirm_states: '¿Eliminar {n} registro(s) de estado?\n\nEsta acción no se puede deshacer. Los períodos de estadísticas afectados se recalcularán.',
+    bulk_delete_confirm_stats: '¿Eliminar {n} fila(s) de estadísticas?\n\nEsta acción no se puede deshacer. Las filas bloqueadas por la protección de datos fuente se omitirán y se reportarán.',
+    bulk_delete_error: 'Error: {err}',
+    bulk_delete_failed: 'Error en eliminación masiva: {err}',
+    bulk_update_error: 'Error: {err}',
+    bulk_update_failed: 'Error en actualización masiva: {err}',
+    n_records_updated: '{n} registro(s) actualizado(s).',
+    n_records_deleted: '{n} registro(s) eliminado(s).',
+    blocked_header: '{n} bloqueado(s) por protección de datos fuente:',
+    blocked_item: '  • id={id}: {reason}',
+    blocked_more: '  • …y {n} más',
+    not_found: '{n} id(s) no encontrado(s).',
+    stats_stale: 'Las estadísticas pueden estar desactualizadas — ejecuta history_editor.recalculate_statistics para corregirlo.',
+    see_change: 'Para ver el cambio en los gráficos de HA, navega a otra página y vuelve, o recarga la pestaña.',
+    no_records: 'No se encontraron registros',
+    no_statistics: 'No se encontraron registros de estadísticas',
+    load_prev: '↑ Desplaza hacia arriba o haz clic para cargar registros anteriores',
+    loading_more: '⟳ Cargando más registros...',
+    locked_state_history: 'Existen registros del historial de estados para este período — edita el historial de estados en su lugar',
+    locked_short_term: 'Existen estadísticas a corto plazo para este período — edita las estadísticas a corto plazo en su lugar',
+    warning_icon: '🐉',
+    warning_title: '¡Aquí hay dragones!',
+    warning_text: 'Esta herramienta edita directamente tu base de datos de Home Assistant — historial de estados, estadísticas a corto plazo y estadísticas a largo plazo.<br><br>Podrías romper fácilmente tus datos si no sabes lo que estás haciendo. <strong>Haz siempre una copia de seguridad de tu base de datos antes de hacer cambios.</strong>',
+    warning_proceed: 'Sé lo que hago. Continuar.',
+    na: 'N/D',
+  },
+};
+
 class HistoryEditorPanel extends HTMLElement {
   constructor() {
     super();
     // Enable debug mode by checking URL parameter or localStorage
-    this._debugMode = new URLSearchParams(window.location.search).has('debug') || 
+    this._debugMode = new URLSearchParams(window.location.search).has('debug') ||
                       localStorage.getItem('history_editor_debug') === 'true';
-    
+
     if (this._debugMode) {
       console.log('[HistoryEditor] Constructor called - Debug mode enabled');
     }
     this._hass = null;
+    this._lang = 'en';
     this.selectedEntity = null;
     this.records = [];
     this._initialized = false;
@@ -40,6 +272,17 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._debugMode) {
       console.log(...args);
     }
+  }
+
+  _t(key, params) {
+    const dict = _TRANSLATIONS[this._lang] || _TRANSLATIONS.en;
+    let s = dict[key] ?? _TRANSLATIONS.en[key] ?? key;
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        s = s.replace(`{${k}}`, v);
+      }
+    }
+    return s;
   }
 
   async connectedCallback() {
@@ -119,6 +362,13 @@ class HistoryEditorPanel extends HTMLElement {
   set hass(hass) {
     this._debugLog('[HistoryEditor] hass setter called, hass:', hass ? 'defined' : 'null');
     this._hass = hass;
+    if (hass && hass.language) {
+      const lang = hass.language.split('-')[0];
+      if (_TRANSLATIONS[lang] && lang !== this._lang) {
+        this._lang = lang;
+        this._debugLog('[HistoryEditor] Language set to:', this._lang);
+      }
+    }
     this._updateDebugStatus('hass', hass ? 'Connected ✓' : 'Not connected', hass ? 'status-ok' : 'status-error');
     this._ensureInitialized();
     // Set up ha-form when hass becomes available
@@ -268,15 +518,10 @@ class HistoryEditorPanel extends HTMLElement {
         }
       </style>
       <div id="warning-screen" class="warning-screen">
-        <div class="warning-icon">&#x1F409;</div>
-        <div class="warning-title">Here be dragons!</div>
-        <div class="warning-text">
-          This tool directly edits your Home Assistant database &mdash;
-          state history, short-term statistics, and long-term statistics.<br><br>
-          You could easily break your data if you don&rsquo;t know what you are doing.
-          <strong>Always back up your database before making changes.</strong>
-        </div>
-        <button class="warning-proceed" id="warning-accept-btn">I know what I&rsquo;m doing. Proceed.</button>
+        <div class="warning-icon">${this._t('warning_icon')}</div>
+        <div class="warning-title">${this._t('warning_title')}</div>
+        <div class="warning-text">${this._t('warning_text')}</div>
+        <button class="warning-proceed" id="warning-accept-btn">${this._t('warning_proceed')}</button>
       </div>
     `;
 
@@ -700,7 +945,7 @@ class HistoryEditorPanel extends HTMLElement {
       </style>
 
       <div class="header">
-        <h1>🗄️ History Editor</h1>
+        <h1>🗄️ ${this._t('title')}</h1>
       </div>
 
       ${this._debugMode ? `<div class="debug-status" id="debug-status">
@@ -732,106 +977,106 @@ class HistoryEditorPanel extends HTMLElement {
 
       <div class="controls">
         <div class="control-group">
-          <label for="data-source">Data Source</label>
+          <label for="data-source">${this._t('data_source')}</label>
           <select id="data-source">
-            <option value="states">State History</option>
-            <option value="statistics">Statistics (Long-term, hourly)</option>
-            <option value="statistics_short_term">Statistics (Short-term, 5 min)</option>
+            <option value="states">${this._t('states')}</option>
+            <option value="statistics">${this._t('statistics_long')}</option>
+            <option value="statistics_short_term">${this._t('statistics_short')}</option>
           </select>
         </div>
         <div class="control-group entity-form-container">
           <ha-form id="entity-form"></ha-form>
         </div>
         <div class="control-group">
-          <label for="record-limit">Record Limit</label>
+          <label for="record-limit">${this._t('record_limit')}</label>
           <input type="number" id="record-limit" value="100" min="1" max="1000">
         </div>
         <div class="control-group">
-          <label for="go-to-date">Go to Date/Time</label>
-          <input type="datetime-local" id="go-to-date" title="Jump to records from this date">
+          <label for="go-to-date">${this._t('go_to_date')}</label>
+          <input type="datetime-local" id="go-to-date" title="${this._t('go_to_date_title')}">
         </div>
-        <button id="go-to-btn" class="secondary">Go to Date</button>
-        <button id="clear-date-btn" class="secondary">Clear Date</button>
-        <button id="add-btn" class="secondary">Add New Record</button>
-        <button id="scroll-top-btn" class="secondary" title="Go to the first (most recent) records">⬆ Top</button>
-        <button id="scroll-bottom-btn" class="secondary" title="Go to the last (oldest) records">⬇ Bottom</button>
+        <button id="go-to-btn" class="secondary">${this._t('go_to_btn')}</button>
+        <button id="clear-date-btn" class="secondary">${this._t('clear_date')}</button>
+        <button id="add-btn" class="secondary">${this._t('add_new')}</button>
+        <button id="scroll-top-btn" class="secondary" title="${this._t('scroll_top_title')}">${this._t('scroll_top')}</button>
+        <button id="scroll-bottom-btn" class="secondary" title="${this._t('scroll_bottom_title')}">${this._t('scroll_bottom')}</button>
       </div>
 
       <div id="bulk-action-bar" class="bulk-action-bar" style="display:none">
-        <span id="bulk-selected-count" class="bulk-selected-count">0 selected</span>
-        <button id="bulk-edit-btn" type="button" class="secondary">Edit Selected</button>
-        <button id="bulk-delete-btn" type="button" class="danger">Delete Selected</button>
-        <button id="bulk-clear-btn" type="button" class="secondary">Clear</button>
+        <span id="bulk-selected-count" class="bulk-selected-count">${this._t('n_selected', {n: 0})}</span>
+        <button id="bulk-edit-btn" type="button" class="secondary">${this._t('edit_selected')}</button>
+        <button id="bulk-delete-btn" type="button" class="danger">${this._t('delete_selected')}</button>
+        <button id="bulk-clear-btn" type="button" class="secondary">${this._t('clear_selection')}</button>
       </div>
 
       <div class="table-container">
         <div id="records-display"></div>
-        <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">⟳ Loading more records...</div>
+        <div id="loading-more-indicator" class="loading-more-indicator" style="display:none">${this._t('loading_more')}</div>
         <div id="scroll-sentinel" class="scroll-sentinel"></div>
       </div>
 
       <div id="edit-modal" class="modal">
         <div class="modal-content">
           <div class="modal-header">
-            <h2 id="modal-title">Edit Record</h2>
+            <h2 id="modal-title">${this._t('edit_record_title')}</h2>
             <button id="modal-close" class="secondary">✕</button>
           </div>
           <form id="edit-form">
             <div id="bulk-mode-banner" class="bulk-mode-banner" style="display:none">
               <span id="bulk-mode-banner-text"></span>
-              <div class="form-help">Leave a field empty to keep the current value on each selected record.</div>
+              <div class="form-help">${this._t('bulk_help')}</div>
             </div>
             <div id="single-id-field" class="form-field">
-              <label id="id-field-label">State ID</label>
+              <label id="id-field-label">${this._t('state_id_label')}</label>
               <input type="text" id="edit-state-id" readonly>
             </div>
             <div id="states-form-fields">
               <div class="form-field">
-                <label>Entity ID</label>
+                <label>${this._t('entity_id_label')}</label>
                 <input type="text" id="edit-entity-id">
               </div>
               <div class="form-field">
-                <label>State</label>
+                <label>${this._t('state_label')}</label>
                 <input type="text" id="edit-state">
               </div>
               <div class="form-field">
-                <label>Attributes (JSON)</label>
+                <label>${this._t('attributes_label')}</label>
                 <textarea id="edit-attributes"></textarea>
               </div>
               <div class="form-field">
-                <label>Timestamp</label>
+                <label>${this._t('timestamp_label')}</label>
                 <input type="datetime-local" id="edit-last-updated">
               </div>
             </div>
             <div id="stats-form-fields" style="display:none">
               <div class="form-field">
-                <label>Start Time</label>
+                <label>${this._t('start_time_label')}</label>
                 <input type="datetime-local" id="edit-stat-start">
               </div>
               <div class="form-field">
-                <label>Mean</label>
+                <label>${this._t('mean_label')}</label>
                 <input type="number" step="any" id="edit-stat-mean" placeholder="null">
               </div>
               <div class="form-field">
-                <label>Min</label>
+                <label>${this._t('min_label')}</label>
                 <input type="number" step="any" id="edit-stat-min" placeholder="null">
               </div>
               <div class="form-field">
-                <label>Max</label>
+                <label>${this._t('max_label')}</label>
                 <input type="number" step="any" id="edit-stat-max" placeholder="null">
               </div>
               <div class="form-field">
-                <label>Sum</label>
+                <label>${this._t('sum_label')}</label>
                 <input type="number" step="any" id="edit-stat-sum" placeholder="null">
               </div>
               <div class="form-field">
-                <label>State (last)</label>
+                <label>${this._t('state_last_label')}</label>
                 <input type="number" step="any" id="edit-stat-state-val" placeholder="null">
               </div>
             </div>
             <div class="modal-actions">
-              <button type="button" id="modal-cancel" class="secondary">Cancel</button>
-              <button type="submit" id="modal-save">Save</button>
+              <button type="button" id="modal-cancel" class="secondary">${this._t('cancel')}</button>
+              <button type="submit" id="modal-save">${this._t('save')}</button>
             </div>
           </form>
         </div>
@@ -969,7 +1214,7 @@ class HistoryEditorPanel extends HTMLElement {
     const dateValue = dateInput.value;
     
     if (!dateValue) {
-      this.showMessage('Please select a date and time first');
+      this.showMessage(this._t('select_date_first'));
       return;
     }
     
@@ -1081,14 +1326,14 @@ class HistoryEditorPanel extends HTMLElement {
       } else {
         const errorMsg = result?.error || 'Unknown error occurred';
         this._debugLog('[HistoryEditor] API returned error:', errorMsg);
-        alert('Error loading records: ' + errorMsg);
-        this.showMessage('Failed to load records: ' + errorMsg);
+        alert(this._t('error_loading', {err: errorMsg}));
+        this.showMessage(this._t('failed_load', {err: errorMsg}));
       }
       
     } catch (error) {
       console.error('Error loading records:', error);
-      alert('Error loading records: ' + error.message);
-      this.showMessage('Error loading records. Please check the console for details.');
+      alert(this._t('error_loading', {err: error.message}));
+      this.showMessage(this._t('error_console'));
     }
   }
 
@@ -1122,7 +1367,7 @@ class HistoryEditorPanel extends HTMLElement {
       display.innerHTML = `
         <div class="empty-state">
           <div style="font-size: 48px; opacity: 0.3;">📋</div>
-          <p>No records found</p>
+          <p>${this._t('no_records')}</p>
         </div>
       `;
       return;
@@ -1132,17 +1377,17 @@ class HistoryEditorPanel extends HTMLElement {
       <table>
         <thead>
           <tr>
-            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="Select all visible"></th>
-            <th>ID</th>
-            <th>State</th>
-            <th>Attributes</th>
-            <th>Timestamp</th>
-            <th>Actions</th>
+            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="${this._t('select_all')}"></th>
+            <th>${this._t('th_id')}</th>
+            <th>${this._t('th_state')}</th>
+            <th>${this._t('th_attributes')}</th>
+            <th>${this._t('th_timestamp')}</th>
+            <th>${this._t('th_actions')}</th>
           </tr>
         </thead>
         <tbody id="records-tbody">
           <tr id="load-prev-row" style="display:none">
-            <td colspan="6" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+            <td colspan="6" class="load-prev-cell">${this._t('load_prev')}</td>
           </tr>
     `;
 
@@ -1168,7 +1413,7 @@ class HistoryEditorPanel extends HTMLElement {
     const title = this.querySelector('#modal-title');
     const form = this.querySelector('#edit-form');
 
-    title.textContent = 'Add New Record';
+    title.textContent = this._t('add_new_title');
     form.reset();
     
     this.querySelector('#edit-state-id').value = 'NEW';
@@ -1176,7 +1421,7 @@ class HistoryEditorPanel extends HTMLElement {
     this.querySelector('#edit-entity-id').readOnly = false;
 
     // Ensure states fields are shown for add mode
-    this.querySelector('#id-field-label').textContent = 'State ID';
+    this.querySelector('#id-field-label').textContent = this._t('state_id_label');
     this.querySelector('#states-form-fields').style.display = 'block';
     this.querySelector('#stats-form-fields').style.display = 'none';
     
@@ -1192,8 +1437,8 @@ class HistoryEditorPanel extends HTMLElement {
 
     if (this.dataSource !== 'states') {
       // Statistics mode
-      title.textContent = 'Edit Statistic';
-      this.querySelector('#id-field-label').textContent = 'Statistic ID';
+      title.textContent = this._t('edit_statistic_title');
+      this.querySelector('#id-field-label').textContent = this._t('statistic_id_label');
       this.querySelector('#edit-state-id').value = record.id;
 
       this.querySelector('#states-form-fields').style.display = 'none';
@@ -1213,8 +1458,8 @@ class HistoryEditorPanel extends HTMLElement {
     }
 
     // States mode
-    title.textContent = 'Edit Record';
-    this.querySelector('#id-field-label').textContent = 'State ID';
+    title.textContent = this._t('edit_record_title');
+    this.querySelector('#id-field-label').textContent = this._t('state_id_label');
     this.querySelector('#states-form-fields').style.display = 'block';
     this.querySelector('#stats-form-fields').style.display = 'none';
 
@@ -1249,12 +1494,12 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   formatDatetimeDisplay(isoString) {
-    if (!isoString) return 'N/A';
+    if (!isoString) return this._t('na');
     try {
       const date = new Date(isoString);
       // Validate that the date is valid
       if (isNaN(date.getTime())) {
-        return 'N/A';
+        return this._t('na');
       }
       // Format: YYYY-MM-DD HH:MM:SS
       const year = date.getFullYear();
@@ -1265,7 +1510,7 @@ class HistoryEditorPanel extends HTMLElement {
       const seconds = String(date.getSeconds()).padStart(2, '0');
       return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
     } catch (error) {
-      return 'N/A';
+      return this._t('na');
     }
   }
 
@@ -1315,7 +1560,7 @@ class HistoryEditorPanel extends HTMLElement {
         attributes = JSON.parse(attributesText);
       }
     } catch (error) {
-      alert('Invalid JSON in attributes field');
+      alert(this._t('invalid_json'));
       return;
     }
 
@@ -1346,11 +1591,11 @@ class HistoryEditorPanel extends HTMLElement {
         const result = await response.json();
         
         if (result.success) {
-          alert('Record created successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
+          alert(this._t('record_created'));
           this.hideModal();
           this.loadRecords();
         } else {
-          alert('Error creating record: ' + (result.error || 'Unknown error'));
+          alert(this._t('error_creating', {err: result.error || 'Unknown error'}));
         }
       } else {
         // Update existing record
@@ -1378,21 +1623,21 @@ class HistoryEditorPanel extends HTMLElement {
         const result = await response.json();
         
         if (result.success) {
-          alert('Record updated successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
+          alert(this._t('record_updated'));
           this.hideModal();
           this.loadRecords();
         } else {
-          alert('Error updating record: ' + (result.error || 'Unknown error'));
+          alert(this._t('error_updating', {err: result.error || 'Unknown error'}));
         }
       }
     } catch (error) {
       console.error('Error saving record:', error);
-      alert('Error saving record: ' + error.message);
+      alert(this._t('error_saving', {err: error.message}));
     }
   }
 
   async deleteRecord(stateId) {
-    if (!confirm(`Are you sure you want to delete record ${stateId}?`)) {
+    if (!confirm(this._t(this.dataSource === 'states' ? 'confirm_delete' : 'confirm_delete_stat'))) {
       return;
     }
 
@@ -1417,10 +1662,10 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
       
       if (result.success) {
-        alert('Record deleted successfully.\n\nTo see the change in HA history graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
+        alert(this._t('record_deleted'));
         this.loadRecords();
       } else {
-        alert('Error deleting record: ' + (result.error || 'Unknown error'));
+        alert(this._t('error_deleting', {err: result.error || 'Unknown error'}));
       }
     } catch (error) {
       console.error('Error deleting record:', error);
@@ -1486,13 +1731,13 @@ class HistoryEditorPanel extends HTMLElement {
         this.displayStatistics(records);
       } else {
         const errorMsg = result?.error || 'Unknown error occurred';
-        alert('Error loading statistics: ' + errorMsg);
-        this.showMessage('Failed to load statistics: ' + errorMsg);
+        alert(this._t('error_loading_stats', {err: errorMsg}));
+        this.showMessage(this._t('failed_load_stats', {err: errorMsg}));
       }
     } catch (error) {
       console.error('Error loading statistics:', error);
-      alert('Error loading statistics: ' + error.message);
-      this.showMessage('Error loading statistics. Please check the console for details.');
+      alert(this._t('error_loading_stats', {err: error.message}));
+      this.showMessage(this._t('error_console_stats'));
     }
   }
 
@@ -1503,7 +1748,7 @@ class HistoryEditorPanel extends HTMLElement {
       display.innerHTML = `
         <div class="empty-state">
           <div style="font-size: 48px; opacity: 0.3;">📊</div>
-          <p>No statistics records found</p>
+          <p>${this._t('no_statistics')}</p>
         </div>
       `;
       return;
@@ -1513,20 +1758,20 @@ class HistoryEditorPanel extends HTMLElement {
       <table>
         <thead>
           <tr>
-            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="Select all unlocked visible rows"></th>
-            <th>ID</th>
-            <th>Start Time</th>
-            <th>Mean</th>
-            <th>Min</th>
-            <th>Max</th>
-            <th>Sum</th>
-            <th>State</th>
-            <th>Actions</th>
+            <th class="checkbox-cell"><input type="checkbox" id="select-all-rows" title="${this._t('select_all_unlocked')}"></th>
+            <th>${this._t('th_id')}</th>
+            <th>${this._t('th_start_time')}</th>
+            <th>${this._t('th_mean')}</th>
+            <th>${this._t('th_min')}</th>
+            <th>${this._t('th_max')}</th>
+            <th>${this._t('th_sum')}</th>
+            <th>${this._t('th_state')}</th>
+            <th>${this._t('th_actions')}</th>
           </tr>
         </thead>
         <tbody id="records-tbody">
           <tr id="load-prev-row" style="display:none">
-            <td colspan="9" class="load-prev-cell">↑ Scroll up or click to load earlier records</td>
+            <td colspan="9" class="load-prev-cell">${this._t('load_prev')}</td>
           </tr>
     `;
 
@@ -1576,15 +1821,15 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (result.success) {
-        alert('Statistic updated successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
+        alert(this._t('stat_updated'));
         this.hideModal();
         this.loadRecords();
       } else {
-        alert('Error updating statistic: ' + (result.error || 'Unknown error'));
+        alert(this._t('error_updating_stat', {err: result.error || 'Unknown error'}));
       }
     } catch (error) {
       console.error('Error saving statistic:', error);
-      alert('Error saving statistic: ' + error.message);
+      alert(this._t('error_saving_stat', {err: error.message}));
     }
   }
 
@@ -1605,10 +1850,10 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (result.success) {
-        alert('Statistic deleted successfully.\n\nTo see the change in HA graphs and statistics panels, navigate to another page and back, or reload the browser tab.');
+        alert(this._t('stat_deleted'));
         this.loadRecords();
       } else {
-        alert('Error deleting statistic: ' + (result.error || 'Unknown error'));
+        alert(this._t('error_deleting_stat', {err: result.error || 'Unknown error'}));
       }
     } catch (error) {
       console.error('Error deleting statistic:', error);
@@ -1649,7 +1894,7 @@ class HistoryEditorPanel extends HTMLElement {
     } else {
       bar.style.display = 'flex';
       const label = this.querySelector('#bulk-selected-count');
-      if (label) label.textContent = `${count} selected`;
+      if (label) label.textContent = this._t('n_selected', {n: count});
     }
   }
 
@@ -1668,10 +1913,10 @@ class HistoryEditorPanel extends HTMLElement {
     idField.style.display = 'none';
     banner.style.display = 'block';
     const count = this._selectedIds.size;
-    bannerText.textContent = `Editing ${count} selected ${count === 1 ? 'record' : 'records'}.`;
+    bannerText.textContent = this._t('bulk_editing', {n: count});
 
     if (this.dataSource === 'states') {
-      title.textContent = `Bulk Edit (${count} state records)`;
+      title.textContent = this._t('bulk_edit_states', {n: count});
       this.querySelector('#states-form-fields').style.display = 'block';
       this.querySelector('#stats-form-fields').style.display = 'none';
       // Hide entity_id and timestamp fields in bulk mode — those don't make
@@ -1682,7 +1927,7 @@ class HistoryEditorPanel extends HTMLElement {
       if (tsField) tsField.style.display = 'none';
     } else {
       const isShort = this.dataSource === 'statistics_short_term';
-      title.textContent = `Bulk Edit (${count} ${isShort ? 'short-term' : 'long-term'} stats)`;
+      title.textContent = this._t(isShort ? 'bulk_edit_short' : 'bulk_edit_long', {n: count});
       this.querySelector('#states-form-fields').style.display = 'none';
       this.querySelector('#stats-form-fields').style.display = 'block';
       // Hide start_time in bulk mode — different per row.
@@ -1696,12 +1941,10 @@ class HistoryEditorPanel extends HTMLElement {
   async _handleBulkDelete() {
     const count = this._selectedIds.size;
     if (count === 0) return;
-    const label = this.dataSource === 'states' ? 'state record' : 'statistics row';
     const proceed = confirm(
-      `Delete ${count} ${label}${count === 1 ? '' : 's'}?\n\nThis cannot be undone. ` +
-      (this.dataSource === 'states'
-        ? 'Affected statistics periods will be recalculated.'
-        : 'Rows blocked by the source-data guard will be skipped and reported.')
+      this.dataSource === 'states'
+        ? this._t('bulk_delete_confirm_states', {n: count})
+        : this._t('bulk_delete_confirm_stats', {n: count})
     );
     if (!proceed) return;
 
@@ -1725,7 +1968,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (!result.success) {
-        alert('Error: ' + (result.error || 'Bulk delete failed'));
+        alert(this._t('bulk_delete_error', {err: result.error || 'Bulk delete failed'}));
         return;
       }
       alert(this._formatBulkResult(result, 'deleted'));
@@ -1733,7 +1976,7 @@ class HistoryEditorPanel extends HTMLElement {
       this.loadRecords();
     } catch (err) {
       console.error('Bulk delete failed:', err);
-      alert('Bulk delete failed: ' + err.message);
+      alert(this._t('bulk_delete_failed', {err: err.message}));
     }
   }
 
@@ -1752,12 +1995,12 @@ class HistoryEditorPanel extends HTMLElement {
         try {
           body.attributes = JSON.parse(attrText);
         } catch (err) {
-          alert('Attributes must be valid JSON: ' + err.message);
+          alert(this._t('invalid_json_detail', {err: err.message}));
           return;
         }
       }
       if (!('state' in body) && !('attributes' in body)) {
-        alert('Provide a new state value or new attributes (or both) before saving.');
+        alert(this._t('bulk_provide_state_or_attrs'));
         return;
       }
       url = '/api/history_editor/bulk_update';
@@ -1784,7 +2027,7 @@ class HistoryEditorPanel extends HTMLElement {
       setIfNumber('sum', sumV);
       setIfNumber('state', stateV);
       if (Object.keys(body).length <= 2) {
-        alert('Provide at least one numeric value (mean, min, max, sum, state) before saving.');
+        alert(this._t('bulk_provide_numeric'));
         return;
       }
       url = '/api/history_editor/statistics/bulk_update';
@@ -1802,7 +2045,7 @@ class HistoryEditorPanel extends HTMLElement {
       const result = await response.json();
 
       if (!result.success) {
-        alert('Error: ' + (result.error || 'Bulk update failed'));
+        alert(this._t('bulk_update_error', {err: result.error || 'Bulk update failed'}));
         return;
       }
       alert(this._formatBulkResult(result, 'updated'));
@@ -1811,31 +2054,31 @@ class HistoryEditorPanel extends HTMLElement {
       this.loadRecords();
     } catch (err) {
       console.error('Bulk update failed:', err);
-      alert('Bulk update failed: ' + err.message);
+      alert(this._t('bulk_update_failed', {err: err.message}));
     }
   }
 
   _formatBulkResult(result, verb) {
     const count = (verb === 'deleted') ? result.deleted_count : result.updated_count;
-    const lines = [`${count} record${count === 1 ? '' : 's'} ${verb}.`];
+    const key = (verb === 'deleted') ? 'n_records_deleted' : 'n_records_updated';
+    const lines = [this._t(key, {n: count})];
     if (result.blocked && result.blocked.length) {
-      lines.push(`${result.blocked.length} blocked by source-data guard:`);
-      // Show up to 5 reasons inline; collapse the rest
+      lines.push(this._t('blocked_header', {n: result.blocked.length}));
       const sample = result.blocked.slice(0, 5);
-      sample.forEach(({ id, reason }) => lines.push(`  • id=${id}: ${reason}`));
+      sample.forEach(({ id, reason }) => lines.push(this._t('blocked_item', {id, reason})));
       if (result.blocked.length > 5) {
-        lines.push(`  • …and ${result.blocked.length - 5} more`);
+        lines.push(this._t('blocked_more', {n: result.blocked.length - 5}));
       }
     }
     if (result.not_found && result.not_found.length) {
-      lines.push(`${result.not_found.length} id${result.not_found.length === 1 ? '' : 's'} not found.`);
+      lines.push(this._t('not_found', {n: result.not_found.length}));
     }
     if (result.statistics_stale) {
       lines.push('');
-      lines.push('Statistics may be stale — call history_editor.recalculate_statistics to fix.');
+      lines.push(this._t('stats_stale'));
     }
     lines.push('');
-    lines.push('To see the change in HA graphs, navigate away and back, or reload the browser tab.');
+    lines.push(this._t('see_change'));
     return lines.join('\n');
   }
 
@@ -1900,18 +2143,19 @@ class HistoryEditorPanel extends HTMLElement {
       <td class="attribute-preview" data-label="Attributes" title="${this.escapeHtml(attributes)}">${this.escapeHtml(attributesPreview)}</td>
       <td data-label="Timestamp">${this.formatDatetimeDisplay(record.last_updated)}</td>
       <td class="actions">
-        <button class="secondary edit-btn" data-state-id="${record.state_id}">Edit</button>
-        <button class="danger delete-btn" data-state-id="${record.state_id}">Delete</button>
+        <button class="secondary edit-btn" data-state-id="${record.state_id}">${this._t('edit')}</button>
+        <button class="danger delete-btn" data-state-id="${record.state_id}">${this._t('delete')}</button>
       </td>`;
   }
 
   _buildStatRowCells(record) {
-    const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : 'N/A';
+    const na = this._t('na');
+    const fmtNum = (v) => (v !== null && v !== undefined) ? Number(v).toFixed(3) : na;
     const locked = record.has_source_data === true;
     const lockTitle = locked
       ? (this.dataSource === 'statistics_short_term'
-        ? 'State history exists for this period — edit state history instead'
-        : 'Short-term statistics exist for this period — edit short-term statistics instead')
+        ? this._t('locked_state_history')
+        : this._t('locked_short_term'))
       : '';
     const lockIcon = locked ? ' 🔒' : '';
     const disabledAttr = locked ? 'disabled' : '';
@@ -1927,8 +2171,8 @@ class HistoryEditorPanel extends HTMLElement {
       <td data-label="Sum">${fmtNum(record.sum)}</td>
       <td data-label="State">${fmtNum(record.state)}</td>
       <td class="actions">
-        <button class="secondary edit-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Edit</button>
-        <button class="danger delete-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>Delete</button>
+        <button class="secondary edit-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>${this._t('edit')}</button>
+        <button class="danger delete-btn" data-state-id="${record.id}" ${disabledAttr} ${titleAttr}>${this._t('delete')}</button>
       </td>`;
   }
 

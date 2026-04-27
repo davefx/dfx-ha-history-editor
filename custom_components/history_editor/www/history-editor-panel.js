@@ -353,6 +353,8 @@ class HistoryEditorPanel extends HTMLElement {
         }
         this.selectedEntity = newEntity;
         this._debugLog('[HistoryEditor] Selected entity:', this.selectedEntity);
+        // Reset chart immediately so the old entity's data isn't visible
+        this._resetChart();
         // Automatically load records when entity is selected
         this.loadRecords();
         this._loadChart(newEntity);
@@ -362,8 +364,7 @@ class HistoryEditorPanel extends HTMLElement {
         this.records = [];
         if (this._clearSelection) this._clearSelection();
         this.displayRecords([]);
-        const chartEl = this.querySelector('#chart-container');
-        if (chartEl) chartEl.style.display = 'none';
+        this._resetChart();
         this._debugLog('[HistoryEditor] Entity selection cleared');
       }
     });
@@ -2097,6 +2098,25 @@ class HistoryEditorPanel extends HTMLElement {
   }
 
   // ─── Overview chart ────────────────────────────────────────────────────────
+
+  _resetChart() {
+    this._chartPoints = [];
+    this._chartEntity = null;
+    this._chartHasMore = true;
+    this._chartLayout = null;
+    const container = this.querySelector('#chart-container');
+    if (container) container.style.display = 'none';
+    const btn = this.querySelector('#chart-earlier-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = `← ${this._t('chart_earlier')}`;
+    }
+    const canvas = this.querySelector('#overview-chart');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
 
   async _loadChart(entityId) {
     const container = this.querySelector('#chart-container');

@@ -2,6 +2,8 @@
 
 A custom Home Assistant component that provides a powerful interface for editing, creating, and deleting history records in your Home Assistant database.
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=davefx&repository=dfx-ha-history-editor&category=integration)
+
 ## Features
 
 - 🔍 **Entity Selector**: Choose any entity from your Home Assistant instance
@@ -16,6 +18,12 @@ A custom Home Assistant component that provides a powerful interface for editing
 ## Installation
 
 ### HACS (Recommended)
+
+Click the button below to add this repository to HACS and install it directly:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=davefx&repository=dfx-ha-history-editor&category=integration)
+
+Or manually:
 
 1. Open HACS in your Home Assistant instance
 2. Click on "Integrations"

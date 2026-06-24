@@ -168,6 +168,17 @@ SERVICE_BULK_DELETE_STATISTIC_SCHEMA = vol.Schema({
 })
 
 
+def _is_admin_request(request: web.Request) -> bool:
+    """Return True if the request was made by an authenticated admin user.
+
+    The panel UI is admin-only, but the REST endpoints are reachable by any
+    authenticated user. Mutating recorder history / statistics must therefore be
+    gated on admin here as well.
+    """
+    user = request.get("hass_user")
+    return user is not None and user.is_admin
+
+
 class GetRecordsView(HomeAssistantView):
     """View to handle getting history records via REST API."""
 
@@ -181,6 +192,11 @@ class GetRecordsView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         """Get history records for an entity."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             entity_id = request.query.get("entity_id")
             if not entity_id:
@@ -255,6 +271,11 @@ class UpdateRecordView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Update a history record."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -336,6 +357,11 @@ class DeleteRecordView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Delete a history record."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -385,6 +411,11 @@ class CreateRecordView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Create a new history record."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
             
@@ -466,6 +497,11 @@ class GetStatisticsView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         """Get statistics records for an entity."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             entity_id = request.query.get("entity_id")
             if not entity_id:
@@ -543,6 +579,11 @@ class UpdateStatisticView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Update a statistics record."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -623,6 +664,11 @@ class DeleteStatisticView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Delete a statistics record."""
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -692,6 +738,11 @@ class BulkUpdateRecordView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request: web.Request) -> web.Response:
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -754,6 +805,11 @@ class BulkDeleteRecordView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request: web.Request) -> web.Response:
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -786,6 +842,11 @@ class BulkUpdateStatisticView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request: web.Request) -> web.Response:
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 
@@ -833,6 +894,11 @@ class BulkDeleteStatisticView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request: web.Request) -> web.Response:
+        if not _is_admin_request(request):
+            return self.json(
+                {"success": False, "error": "Admin privileges required"},
+                status_code=403,
+            )
         try:
             data = await request.json()
 

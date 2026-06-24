@@ -28,3 +28,7 @@ htmlcov/
 *.log
 tmp/
 temp/
+
+# Local dev virtualenv
+venv/
+.venv/

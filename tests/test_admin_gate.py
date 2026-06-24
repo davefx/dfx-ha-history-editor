@@ -99,3 +99,45 @@ def test_admin_passes_the_gate(view):
     """
     resp = _call(view, FakeRequest(user=SimpleNamespace(is_admin=True)))
     assert resp.status != 403
+
+
+# Endpoints that mutate recorder history / statistics. These are the ones the
+# HACS review (hacs/default#7264) flagged: they required authentication but were
+# reachable by any authenticated user while the panel UI is admin-only.
+MUTATING_VIEWS = [
+    UpdateRecordView,
+    DeleteRecordView,
+    CreateRecordView,
+    UpdateStatisticView,
+    DeleteStatisticView,
+    BulkUpdateRecordView,
+    BulkDeleteRecordView,
+    BulkUpdateStatisticView,
+    BulkDeleteStatisticView,
+]
+
+
+@pytest.mark.parametrize(
+    "view", MUTATING_VIEWS, ids=[v.__name__ for v in MUTATING_VIEWS]
+)
+def test_regression_non_admin_cannot_mutate_recorder(view):
+    """Regression for hacs/default#7264.
+
+    A logged-in but non-admin user must not be able to reach any recorder
+    mutation through the REST API. Each mutating endpoint must short-circuit
+    with 403 *before* touching the database, so a realistic payload (which would
+    otherwise be acted upon) is supplied to make the test fail loudly if the
+    admin gate is ever removed.
+    """
+    payload = {
+        "state_id": 1,
+        "state_ids": [1, 2],
+        "id": 1,
+        "ids": [1, 2],
+        "entity_id": "sensor.test",
+        "state": "42",
+    }
+    non_admin = SimpleNamespace(is_admin=False)
+    resp = _call(view, FakeRequest(user=non_admin, json_data=payload))
+    assert resp.status == 403
+    assert b"Admin privileges required" in resp.body

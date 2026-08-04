@@ -1,0 +1,11 @@
+url_path,views_total,views_unique
+/davefx/dfx-ha-history-editor,73,41
+/davefx/dfx-ha-history-editor/issues,5,5
+/davefx/dfx-ha-history-editor/tree/main/examples,5,2
+/davefx/dfx-ha-history-editor/blob/main/configuration.yaml.example,4,4
+/davefx/dfx-ha-history-editor/blob/main/examples/automations.yaml,3,2
+/davefx/dfx-ha-history-editor/tree/main,3,1
+/davefx/dfx-ha-history-editor/blob/main/UI_GUIDE.md,2,2
+/davefx/dfx-ha-history-editor/tree/main/custom_components/history_editor,2,1
+/davefx/dfx-ha-history-editor/blob/main/custom_components/history_editor/panel.py,1,1
+/davefx/dfx-ha-history-editor/blob/main/custom_components/history_editor/www/history-editor-panel.js,1,1

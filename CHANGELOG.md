@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-08-20
+
+### Security
+
+- Gate the `history_editor.*` services on admin privileges. Every recorder
+  operation is exposed both as a REST endpoint and as a service; only the
+  endpoints were gated (1.3.1), so a non-admin who could not reach
+  `/api/history_editor/bulk_delete` could still call `history_editor.bulk_delete`
+  over the websocket `call_service` API and destroy the same history. All nine
+  services now resolve `call.context.user_id` through `hass.auth.async_get_user()`
+  and raise `Unauthorized` for non-admins, following the semantics of Home
+  Assistant's own `async_register_admin_service`: calls with no user in their
+  context (automations, scripts, internal calls) are trusted.
+
+### Fixed
+
+- `async_register_panel` no longer reads the translation file with a blocking
+  `open()` / `json.load()` on the event loop; the read goes through
+  `hass.async_add_executor_job`.
+
 ## [1.3.3] - 2026-08-20
 
 ### Added
@@ -126,6 +146,7 @@ brands CDN.
 - Statistics consistency handling: short-term/long-term recalculation and the
   running-sum cascade for `total` / `total_increasing` sensors.
 
+[1.3.4]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.0...v1.3.1

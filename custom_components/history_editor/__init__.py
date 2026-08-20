@@ -12,7 +12,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import States, StatesMeta
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError, Unauthorized
+from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
@@ -180,6 +180,30 @@ def _require_admin(request: web.Request) -> None:
     user = request.get("hass_user")
     if user is None or not user.is_admin:
         raise Unauthorized()
+
+
+async def _require_admin_service(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Reject non-admin callers of the ``history_editor.*`` services.
+
+    The REST endpoints are gated by :func:`_require_admin`, but every operation
+    is also registered as a service, and services are callable by any
+    authenticated user over the websocket API. Without this check a non-admin
+    who cannot reach ``/api/history_editor/bulk_delete`` could still call
+    ``history_editor.bulk_delete`` and destroy the same history.
+
+    Follows the semantics of Home Assistant's own
+    ``async_register_admin_service``: a call with no ``user_id`` in its context
+    comes from an automation, script or internal code rather than from a user,
+    and is trusted (creating automations requires admin in the first place).
+    """
+    if call.context.user_id is None:
+        return
+
+    user = await hass.auth.async_get_user(call.context.user_id)
+    if user is None:
+        raise UnknownUser(context=call.context)
+    if not user.is_admin:
+        raise Unauthorized(context=call.context)
 
 
 class GetRecordsView(HomeAssistantView):
@@ -1037,6 +1061,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def get_records(call: ServiceCall) -> ServiceResponse:
         """Get history records for an entity."""
+        await _require_admin_service(hass, call)
         entity_id = call.data["entity_id"]
         start_time = call.data.get("start_time")
         end_time = call.data.get("end_time")
@@ -1049,6 +1074,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def update_record(call: ServiceCall) -> None:
         """Update a history record."""
+        await _require_admin_service(hass, call)
         state_id = call.data["state_id"]
         new_state = call.data.get("state")
         new_attributes = call.data.get("attributes")
@@ -1070,6 +1096,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def delete_record(call: ServiceCall) -> None:
         """Delete a history record."""
+        await _require_admin_service(hass, call)
         state_id = call.data["state_id"]
 
         result = await get_instance(hass).async_add_executor_job(_delete_record_sync, hass, state_id)
@@ -1079,6 +1106,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def create_record(call: ServiceCall) -> None:
         """Create a new history record."""
+        await _require_admin_service(hass, call)
         entity_id = call.data["entity_id"]
         state = call.data["state"]
         attributes = call.data.get("attributes", {})
@@ -1094,6 +1122,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def recalculate_statistics(call: ServiceCall) -> ServiceResponse:
         """Force recalculation of statistics for an entity over a time range."""
+        await _require_admin_service(hass, call)
         entity_id = call.data["entity_id"]
         start_time = call.data["start_time"]
         end_time = call.data["end_time"]
@@ -1114,6 +1143,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_update_record(call: ServiceCall) -> ServiceResponse:
         """Apply the same field overrides to multiple state history records."""
+        await _require_admin_service(hass, call)
         result = await get_instance(hass).async_add_executor_job(
             _bulk_update_record_sync,
             hass,
@@ -1130,6 +1160,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_delete_record(call: ServiceCall) -> ServiceResponse:
         """Delete multiple state history records in one transaction."""
+        await _require_admin_service(hass, call)
         result = await get_instance(hass).async_add_executor_job(
             _bulk_delete_record_sync, hass, call.data["state_ids"],
         )
@@ -1140,6 +1171,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_update_statistic(call: ServiceCall) -> ServiceResponse:
         """Apply the same column overrides to multiple statistics rows."""
+        await _require_admin_service(hass, call)
         result = await get_instance(hass).async_add_executor_job(
             bulk_update_statistic_sync,
             hass,
@@ -1158,6 +1190,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def bulk_delete_statistic(call: ServiceCall) -> ServiceResponse:
         """Delete multiple statistics rows in one transaction."""
+        await _require_admin_service(hass, call)
         result = await get_instance(hass).async_add_executor_job(
             bulk_delete_statistic_sync,
             hass,

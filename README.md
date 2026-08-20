@@ -206,7 +206,8 @@ The response is visible in **Developer Tools → Services** when "Response Data"
 
 - Changes are immediate and cannot be undone through the component
 - The component requires the `recorder` component to be configured
-- Only administrators can access the History Editor panel
+- Only administrators can access the History Editor panel, its `/api/history_editor/*`
+  endpoints and its `history_editor.*` services
 - Database modifications may affect statistics and long-term data
 
 ## Troubleshooting

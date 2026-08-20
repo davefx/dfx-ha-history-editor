@@ -150,3 +150,122 @@ def test_internal_call_without_user_context_is_allowed():
     """
     hass = _call(None, None)
     assert hass.lookups == 0
+
+
+# --------------------------------------------------------------------------
+# End-to-end: run async_setup and call the handlers it actually registered.
+# --------------------------------------------------------------------------
+
+
+class _FakeRecorder:
+    """Stands in for ``get_instance(hass)``.
+
+    Runs the schema probe for real (``async_setup`` bails out otherwise) and
+    only records every other job, so no recorder mutation is ever executed.
+    """
+
+    def __init__(self, schema_probe, hits):
+        self._schema_probe = schema_probe
+        self.hits = hits
+
+    async def async_add_executor_job(self, func, *args):
+        if func is self._schema_probe:
+            return []
+        self.hits.append(func.__name__)
+        return {"success": True}
+
+
+class _FakeHassForSetup(FakeHass):
+    def __init__(self, user):
+        super().__init__(user)
+        self.registered: dict = {}
+        self.http = SimpleNamespace(
+            register_view=lambda view: None,
+            async_register_static_paths=self._noop,
+        )
+        self.services = SimpleNamespace(async_register=self._register_service)
+        self.bus = SimpleNamespace(async_fire=lambda *a, **kw: None)
+        self.config = SimpleNamespace(language="en")
+
+    def _register_service(self, domain, service, handler, **kwargs):
+        self.registered[service] = handler
+
+    async def _noop(self, *args, **kwargs):
+        pass
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+async def _setup(hass, monkeypatch, hits):
+    import custom_components.history_editor as he
+    from custom_components.history_editor import panel as panel_mod
+
+    recorder = _FakeRecorder(he.validate_schema_sync, hits)
+    monkeypatch.setattr(he, "get_instance", lambda _hass: recorder)
+
+    async def fake_register_panel(_hass, **kwargs):
+        pass
+
+    monkeypatch.setattr(panel_mod.panel_custom, "async_register_panel", fake_register_panel)
+    assert await he.async_setup(hass, {}) is not False
+    return hass.registered
+
+
+# A payload every handler would happily act on if it got that far.
+_PAYLOAD = {
+    "entity_id": "sensor.test",
+    "state": "42",
+    "state_id": 1,
+    "id": 1,
+    "state_ids": [1, 2],
+    "ids": [1, 2],
+    "start_time": None,
+    "end_time": None,
+}
+
+
+def test_registered_services_reject_non_admin_before_touching_the_recorder():
+    """The real end-to-end check for hacs/default#7264.
+
+    Not the source of the handlers but the handlers themselves, as registered by
+    ``async_setup``: called by an authenticated non-admin over ``call_service``,
+    every one must raise ``Unauthorized`` and no job may reach the recorder.
+    """
+    hits: list[str] = []
+    monkeypatch = pytest.MonkeyPatch()
+
+    async def scenario():
+        hass = _FakeHassForSetup(SimpleNamespace(is_admin=False, id="u1"))
+        services = await _setup(hass, monkeypatch, hits)
+        assert len(services) == 9, services
+        for name, handler in services.items():
+            call = SimpleNamespace(
+                data=_PAYLOAD, context=SimpleNamespace(user_id="u1")
+            )
+            with pytest.raises(Unauthorized):
+                await handler(call)
+            assert not hits, f"{name} reached the recorder: {hits}"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monkeypatch.undo()
+
+
+def test_registered_services_let_an_admin_through():
+    """Control for the test above: the gate must not block admins."""
+    hits: list[str] = []
+    monkeypatch = pytest.MonkeyPatch()
+
+    async def scenario():
+        hass = _FakeHassForSetup(SimpleNamespace(is_admin=True, id="u2"))
+        services = await _setup(hass, monkeypatch, hits)
+        call = SimpleNamespace(data=_PAYLOAD, context=SimpleNamespace(user_id="u2"))
+        await services["delete_record"](call)
+        assert hits == ["_delete_record_sync"]
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monkeypatch.undo()

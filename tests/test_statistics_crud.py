@@ -200,15 +200,18 @@ class TestUpdateStatisticSync:
         assert result["success"] is False
         assert "state history" in result["error"].lower()
 
-    def test_blocks_long_term_edit_when_short_term_exists(
+    def test_blocks_long_term_edit_when_state_history_exists(
         self, db_session, mock_hass, sample_entity,
     ):
-        _, stat_meta_id, _ = sample_entity
+        """State history in the hour is the real source, so the derived hourly
+        row stays read-only while it is there."""
+        states_meta_id, stat_meta_id, _ = sample_entity
         hour_start = 3600.0 * 100
         row = _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
         _add_short_term(
             db_session, stat_meta_id, start_ts=hour_start + 300, state=2.0,
         )
+        _add_state(db_session, states_meta_id, hour_start + 360, "2.0")
 
         result = update_statistic_sync(
             mock_hass, row.id, mean=99.0, min_val=None, max_val=None,
@@ -216,7 +219,33 @@ class TestUpdateStatisticSync:
         )
 
         assert result["success"] is False
-        assert "short-term" in result["error"].lower()
+        assert "state history" in result["error"].lower()
+
+    def test_allows_long_term_edit_when_only_short_term_remains(
+        self, db_session, mock_hass, sample_entity,
+    ):
+        """Regression for issue #76.
+
+        Short-term rows outlive the states they were derived from (recorder
+        retention is 10 days), and they are derived data themselves.  Blocking
+        on their mere existence left users who had deleted bad state history
+        unable to repair the hourly rows the energy dashboard actually reads.
+        """
+        _, stat_meta_id, _ = sample_entity
+        hour_start = 3600.0 * 100
+        row = _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
+        _add_short_term(
+            db_session, stat_meta_id, start_ts=hour_start + 300, state=2.0,
+        )
+        # No States rows for this hour: nothing authoritative left to defer to.
+
+        result = update_statistic_sync(
+            mock_hass, row.id, mean=99.0, min_val=None, max_val=None,
+            sum_val=None, state=None, start=None, statistic_type="long_term",
+        )
+
+        assert result["success"] is True
+        assert row.mean == 99.0
 
     def test_short_term_update_cascades_to_long_term(
         self, db_session, mock_hass, sample_entity,
@@ -372,22 +401,23 @@ class TestDeleteStatisticSync:
         db_session.expire_all()
         assert db_session.get(StatisticsShortTerm, row.id) is not None
 
-    def test_blocks_long_term_delete_when_short_term_exists(
+    def test_blocks_long_term_delete_when_state_history_exists(
         self, db_session, mock_hass, sample_entity,
     ):
-        _, stat_meta_id, _ = sample_entity
+        states_meta_id, stat_meta_id, _ = sample_entity
         hour_start = 3600.0 * 100
         row = _add_long_term(db_session, stat_meta_id, start_ts=hour_start, state=1.0)
         _add_short_term(
             db_session, stat_meta_id, start_ts=hour_start + 300, state=2.0,
         )
+        _add_state(db_session, states_meta_id, hour_start + 360, "2.0")
 
         result = delete_statistic_sync(
             mock_hass, row.id, statistic_type="long_term",
         )
 
         assert result["success"] is False
-        assert "short-term" in result["error"].lower()
+        assert "state history" in result["error"].lower()
         db_session.expire_all()
         assert db_session.get(Statistics, row.id) is not None
 

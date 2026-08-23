@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-08-23
+
+### Fixed
+
+- Deleting or editing a **range** of state records no longer corrupts the `sum`
+  column of `total` / `total_increasing` sensors. The running-sum cascade was
+  applied once per 5-minute period, so a range of N recalculated periods shifted
+  every later row by the sum of N deltas. Deleting a few hours of an energy
+  sensor drove its running totals far negative and left the energy dashboard
+  showing nonsense. The cascade now runs **once per range**: each period's row is
+  adjusted by its own delta, and only rows after the range are shifted, by the
+  delta of the range's last period. Affects the bulk state paths, the single
+  create/update/delete paths when a record moves between periods, and
+  `history_editor.recalculate_statistics`. ([#76](https://github.com/davefx/dfx-ha-history-editor/issues/76))
+- Long-term (hourly) statistics rows are no longer blocked from editing merely
+  because short-term rows exist for that hour. Short-term rows are derived data
+  and survive for the recorder's full retention, so the old guard blocked every
+  hourly row a user could realistically want to repair — including the rows the
+  energy dashboard reads, leaving no way to fix an entity after deleting its bad
+  state history. A long-term row is now blocked only while actual state history
+  exists in that hour, mirroring the short-term guard.
+  ([#76](https://github.com/davefx/dfx-ha-history-editor/issues/76))
+
+### Changed
+
+- The singular and bulk statistics paths now share one guard implementation
+  (`_check_source_data_blocks_edit`) instead of duplicating it inline.
+
 ## [1.3.4] - 2026-08-20
 
 ### Security
@@ -146,6 +174,7 @@ brands CDN.
 - Statistics consistency handling: short-term/long-term recalculation and the
   running-sum cascade for `total` / `total_increasing` sensors.
 
+[1.3.5]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.1...v1.3.2

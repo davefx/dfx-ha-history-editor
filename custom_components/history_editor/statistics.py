@@ -118,10 +118,16 @@ def _cascade_sum_adjustment(
     )
 
 
-def recalculate_short_term_stat(
+def _recalculate_short_term_stat(
     session, stat_meta_id: int, entity_id: str, start_ts_5min: float,
-) -> bool:
+    cascade_forward: bool,
+) -> tuple[bool, float, bool]:
     """Recalculate and update a short-term statistics record for a 5-minute period.
+
+    Returns ``(updated, sum_delta, has_sum)``.  When *cascade_forward* is true the
+    running-sum delta is cascaded to this period and every later one, which is
+    correct for a single-period edit.  Batch callers pass false and let
+    :func:`recalculate_short_term_stats_range` cascade once for the whole range.
 
     Queries all numeric states in the period, recomputes mean/min/max/state, and
     updates the existing StatisticsShortTerm row. Returns True if a row was updated.
@@ -166,7 +172,7 @@ def recalculate_short_term_stat(
     ).first()
 
     if short_term is None:
-        return False
+        return False, 0.0, False
 
     # Capture old state value and whether this stat has a running sum before
     # making any modifications.  Used for cascading sum adjustments below.
@@ -211,14 +217,91 @@ def recalculate_short_term_stat(
             # No prior value available either — remove the now-meaningless row.
             session.delete(short_term)
 
-    # For sensors with a running sum (total / total_increasing), cascade the
-    # state-change delta to this period and every subsequent one so that the
-    # energy dashboard and statistics panels remain accurate.
-    # _cascade_sum_adjustment returns early when delta == 0, so no extra guard needed.
+    # For sensors with a running sum (total / total_increasing), apply the
+    # state-change delta so the energy dashboard and statistics panels stay
+    # accurate.
+    delta = 0.0
     if has_sum and old_state is not None and new_state is not None:
-        _cascade_sum_adjustment(session, stat_meta_id, start_ts_5min, new_state - old_state)
+        delta = new_state - old_state
+        if cascade_forward:
+            # Single-period edit: this period and every later one shift by delta.
+            # _cascade_sum_adjustment returns early when delta == 0.
+            _cascade_sum_adjustment(session, stat_meta_id, start_ts_5min, delta)
+        elif delta and short_term.sum is not None:
+            # Batch recalculation: adjust this row only.  The caller applies one
+            # forward cascade once the whole range is done -- cascading here
+            # would add one delta per period to every later row, and across a
+            # deleted range those compound into nonsense (issue #76).
+            short_term.sum = short_term.sum + delta
 
-    return True
+    return True, delta, has_sum
+
+
+def recalculate_short_term_stat(
+    session, stat_meta_id: int, entity_id: str, start_ts_5min: float,
+) -> bool:
+    """Recalculate one 5-minute statistics period, cascading any running-sum
+    delta to this period and every later one.
+
+    Use this for a single-period edit.  To recalculate several periods, use
+    :func:`recalculate_short_term_stats_range`, which cascades once for the
+    whole range instead of once per period.
+    """
+    updated, _delta, _has_sum = _recalculate_short_term_stat(
+        session, stat_meta_id, entity_id, start_ts_5min, cascade_forward=True,
+    )
+    return updated
+
+
+def recalculate_short_term_stats_range(
+    session, stat_meta_id: int, entity_id: str, periods: list[float],
+    chunk_callback=None,
+) -> int:
+    """Recalculate a batch of 5-minute periods, cascading the sum **once**.
+
+    Each period's own row is adjusted by its own delta, and the running total of
+    every row *after* the range is shifted by the delta of the last period in it.
+
+    Doing this per period instead would add one delta to every subsequent row,
+    so a range of N recalculated periods shifted later rows by the sum of N
+    deltas.  Deleting a few hours of a ``total_increasing`` sensor drove the
+    running totals far negative and left the energy dashboard unrecoverable
+    (issue #76).
+
+    *periods* is recalculated in chronological order, as later periods read sums
+    adjusted by earlier ones.  *chunk_callback*, when given, is invoked with the
+    number of periods processed so far, letting bulk callers commit in chunks.
+
+    Returns the number of rows updated.
+    """
+    updated_count = 0
+    last_delta = 0.0
+    last_start: float | None = None
+
+    for index, ts in enumerate(sorted(periods), start=1):
+        updated, delta, has_sum = _recalculate_short_term_stat(
+            session, stat_meta_id, entity_id, ts, cascade_forward=False,
+        )
+        if updated:
+            updated_count += 1
+        if updated and has_sum:
+            # The last row in the range carries the offset the rest of the
+            # series has to follow; a row that did not move contributes 0.
+            last_delta = delta
+            last_start = ts
+        if chunk_callback is not None:
+            chunk_callback(index)
+
+    if last_delta and last_start is not None:
+        # Shift only what comes after the range; rows inside it were adjusted
+        # individually above, and the long-term rows covering the range are
+        # re-derived from their short-term rows afterwards.
+        session.flush()
+        _cascade_sum_adjustment(
+            session, stat_meta_id, last_start + SHORT_TERM_PERIOD_SECONDS, last_delta,
+        )
+
+    return updated_count
 
 
 def recalculate_long_term_stat(session, stat_meta_id: int, start_ts_hour: float) -> bool:
@@ -352,9 +435,9 @@ def update_statistics_for_periods(
             continue
         stat_meta_id = stat_meta.id
 
-        for ts in sorted(periods_5min):
-            if recalculate_short_term_stat(session, stat_meta_id, meta.entity_id, ts):
-                short_updated += 1
+        short_updated += recalculate_short_term_stats_range(
+            session, stat_meta_id, meta.entity_id, list(periods_5min),
+        )
 
         # Phase boundary: flush + expire before long-term reads cached short-term sums.
         session.flush()
@@ -426,10 +509,9 @@ def update_statistics_after_state_change(
     # Recalculate short-term stats for all affected 5-minute periods.
     # Process in chronological order so earlier sum-cascade adjustments are
     # applied before later periods are recalculated.
-    updated_5min = 0
-    for start_ts in sorted(affected_5min):
-        if recalculate_short_term_stat(session, stat_meta_id, entity_id, start_ts):
-            updated_5min += 1
+    updated_5min = recalculate_short_term_stats_range(
+        session, stat_meta_id, entity_id, list(affected_5min),
+    )
 
     # Flush pending ORM changes and expire all cached objects so that the
     # long-term recalculation reads the freshly-updated short-term rows
@@ -582,55 +664,14 @@ def update_statistic_sync(
                 return {"success": False, "error": f"Statistic ID {stat_id} not found"}
 
             # Guard: reject direct edits when underlying source data exists
-            if stat.start_ts is not None:
-                if statistic_type == "short_term":
-                    stat_meta_row = session.query(StatisticsMeta).filter(
-                        StatisticsMeta.id == stat.metadata_id
-                    ).first()
-                    if stat_meta_row is not None:
-                        try:
-                            state_count = (
-                                session.query(States)
-                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
-                                .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
-                                .filter(States.last_updated_ts >= stat.start_ts)
-                                .filter(States.last_updated_ts < stat.start_ts + 300.0)
-                                .count()
-                            )
-                            if state_count > 0:
-                                return {
-                                    "success": False,
-                                    "error": (
-                                        "Cannot edit short-term statistics directly: state history "
-                                        "records exist for this 5-minute period. Edit the state "
-                                        "history instead, or wait for the recorder to purge those "
-                                        "states (default: 10 days), after which this row becomes "
-                                        "editable."
-                                    ),
-                                }
-                        except Exception as check_err:
-                            _LOGGER.warning("Source-data check failed for short-term stat %s: %s", stat_id, check_err)
-                else:
-                    try:
-                        short_term_count = (
-                            session.query(StatisticsShortTerm)
-                            .filter(StatisticsShortTerm.metadata_id == stat.metadata_id)
-                            .filter(StatisticsShortTerm.start_ts >= stat.start_ts)
-                            .filter(StatisticsShortTerm.start_ts < stat.start_ts + 3600.0)
-                            .count()
-                        )
-                        if short_term_count > 0:
-                            return {
-                                "success": False,
-                                "error": (
-                                    "Cannot edit long-term statistics directly: short-term statistics "
-                                    "records exist for this hour. Edit the short-term statistics "
-                                    "instead, or wait for the recorder to purge them (default: 10 "
-                                    "days), after which this long-term row becomes editable."
-                                ),
-                            }
-                    except Exception as check_err:
-                        _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat_id, check_err)
+            guard_reason = _check_source_data_blocks_edit(session, stat, statistic_type)
+            if guard_reason is not None:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Cannot edit {statistic_type.replace('_', '-')} statistics directly: {guard_reason}."
+                    ),
+                }
 
             if mean is not None:
                 stat.mean = float(mean)
@@ -698,55 +739,14 @@ def delete_statistic_sync(
             stat_metadata_id = stat.metadata_id
 
             # Guard: reject direct deletes when underlying source data exists
-            if stat_start_ts is not None:
-                if statistic_type == "short_term":
-                    stat_meta_row = session.query(StatisticsMeta).filter(
-                        StatisticsMeta.id == stat_metadata_id
-                    ).first()
-                    if stat_meta_row is not None:
-                        try:
-                            state_count = (
-                                session.query(States)
-                                .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
-                                .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
-                                .filter(States.last_updated_ts >= stat_start_ts)
-                                .filter(States.last_updated_ts < stat_start_ts + 300.0)
-                                .count()
-                            )
-                            if state_count > 0:
-                                return {
-                                    "success": False,
-                                    "error": (
-                                        "Cannot delete short-term statistics directly: state history "
-                                        "records exist for this 5-minute period. Delete the state "
-                                        "history instead, or wait for the recorder to purge those "
-                                        "states (default: 10 days), after which this row becomes "
-                                        "deletable."
-                                    ),
-                                }
-                        except Exception as check_err:
-                            _LOGGER.warning("Source-data check failed for short-term stat %s: %s", stat_id, check_err)
-                else:
-                    try:
-                        short_term_count = (
-                            session.query(StatisticsShortTerm)
-                            .filter(StatisticsShortTerm.metadata_id == stat_metadata_id)
-                            .filter(StatisticsShortTerm.start_ts >= stat_start_ts)
-                            .filter(StatisticsShortTerm.start_ts < stat_start_ts + 3600.0)
-                            .count()
-                        )
-                        if short_term_count > 0:
-                            return {
-                                "success": False,
-                                "error": (
-                                    "Cannot delete long-term statistics directly: short-term statistics "
-                                    "records exist for this hour. Delete the short-term statistics "
-                                    "instead, or wait for the recorder to purge them (default: 10 "
-                                    "days), after which this long-term row becomes deletable."
-                                ),
-                            }
-                    except Exception as check_err:
-                        _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat_id, check_err)
+            guard_reason = _check_source_data_blocks_edit(session, stat, statistic_type)
+            if guard_reason is not None:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Cannot delete {statistic_type.replace('_', '-')} statistics directly: {guard_reason}."
+                    ),
+                }
 
             # Overwrite with the previous period's values so the row
             # becomes "transparent" rather than creating a gap in the
@@ -855,23 +855,33 @@ def _check_source_data_blocks_edit(
             )
         return None
 
-    # long_term
+    # long_term.  Block on the *state history* behind the hour, not on the mere
+    # existence of short-term rows.  Short-term rows survive for the recorder's
+    # full retention (10 days by default) and are themselves derived, so keying
+    # on them blocked every hourly row a user could realistically want to fix --
+    # including the rows the energy dashboard reads, leaving no way to repair a
+    # sensor after deleting its bad state history (issue #76).
+    stat_meta_row = session.query(StatisticsMeta).filter(
+        StatisticsMeta.id == stat.metadata_id
+    ).first()
+    if stat_meta_row is None:
+        return None
     try:
-        short_term_count = (
-            session.query(StatisticsShortTerm)
-            .filter(StatisticsShortTerm.metadata_id == stat.metadata_id)
-            .filter(StatisticsShortTerm.start_ts >= stat.start_ts)
-            .filter(StatisticsShortTerm.start_ts < stat.start_ts + 3600.0)
+        state_count = (
+            session.query(States)
+            .join(StatesMeta, States.metadata_id == StatesMeta.metadata_id)
+            .filter(StatesMeta.entity_id == stat_meta_row.statistic_id)
+            .filter(States.last_updated_ts >= stat.start_ts)
+            .filter(States.last_updated_ts < stat.start_ts + 3600.0)
             .count()
         )
     except Exception as check_err:
         _LOGGER.warning("Source-data check failed for long-term stat %s: %s", stat.id, check_err)
         return None
-    if short_term_count > 0:
+    if state_count > 0:
         return (
-            "short-term statistics records exist for this hour; edit the "
-            "short-term statistics instead, or wait for the recorder to purge "
-            "(default: 10 days)"
+            "state history records exist for this hour; edit the state history "
+            "instead, or wait for the recorder to purge (default: 10 days)"
         )
     return None
 
@@ -1136,16 +1146,20 @@ def recalculate_statistics_sync(
             # values instead of stale identity-map entries.
             if statistic_type in ("short_term", "both"):
                 ts = float(int(start_ts // SHORT_TERM_PERIOD_SECONDS) * SHORT_TERM_PERIOD_SECONDS)
-                periods_in_chunk = 0
+                periods = []
                 while ts < end_ts:
-                    if recalculate_short_term_stat(session, stat_meta_id, entity_id, ts):
-                        updated_short_term += 1
-                    periods_in_chunk += 1
+                    periods.append(ts)
                     ts += SHORT_TERM_PERIOD_SECONDS
-                    if periods_in_chunk >= RECALC_CHUNK_SHORT_TERM:
+
+                def _commit_chunk(processed: int) -> None:
+                    if processed % RECALC_CHUNK_SHORT_TERM == 0:
                         session.commit()
                         session.expire_all()
-                        periods_in_chunk = 0
+
+                updated_short_term += recalculate_short_term_stats_range(
+                    session, stat_meta_id, entity_id, periods,
+                    chunk_callback=_commit_chunk,
+                )
 
             # Phase boundary: commit + expire so the long-term pass reads the
             # freshly-updated short-term rows.  Without this, long-term

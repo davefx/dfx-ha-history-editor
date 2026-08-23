@@ -515,15 +515,16 @@ class TestBulkDeleteStatistic:
         db_session.expire_all()
         assert db_session.get(Statistics, row_id) is None
 
-    def test_blocks_long_term_rows_with_underlying_short_term(
+    def test_blocks_long_term_rows_with_underlying_state_history(
         self, db_session, mock_hass, sample_entity,
     ):
-        _, stat_meta_id, _ = sample_entity
-        # Hour A: has short-term → blocked
+        states_meta_id, stat_meta_id, _ = sample_entity
+        # Hour A: has state history → blocked
         hour_a = 3600.0 * 100
         _add_short_term(db_session, stat_meta_id, start_ts=hour_a + 300, state=1.0)
+        _add_state(db_session, states_meta_id, hour_a + 360, "1.0")
         long_a = _add_long_term(db_session, stat_meta_id, start_ts=hour_a, state=1.0)
-        # Hour B: no short-term → neutralized (long_a is the prior)
+        # Hour B: no source data → neutralized (long_a is the prior)
         hour_b = 3600.0 * 200
         long_b = _add_long_term(db_session, stat_meta_id, start_ts=hour_b, state=2.0)
         ids = [long_a.id, long_b.id]

@@ -94,7 +94,7 @@ def _is_gate_call(stmt: ast.stmt) -> bool:
 def test_all_services_are_registered_with_a_handler():
     """Sanity check for the AST scan itself, so a rename cannot silently pass."""
     handlers = _registered_service_handlers()
-    assert len(handlers) == 9, handlers
+    assert len(handlers) == 11, handlers
     assert set(handlers) == {
         "get_records",
         "update_record",
@@ -105,6 +105,8 @@ def test_all_services_are_registered_with_a_handler():
         "bulk_delete_record",
         "bulk_update_statistic",
         "bulk_delete_statistic",
+        "purge_statistics",
+        "purge_entity_statistics",
     }
 
 
@@ -214,6 +216,7 @@ async def _setup(hass, monkeypatch, hits):
 
 # A payload every handler would happily act on if it got that far.
 _PAYLOAD = {
+    "keep_days": 365,
     "entity_id": "sensor.test",
     "state": "42",
     "state_id": 1,
@@ -238,7 +241,7 @@ def test_registered_services_reject_non_admin_before_touching_the_recorder():
     async def scenario():
         hass = _FakeHassForSetup(SimpleNamespace(is_admin=False, id="u1"))
         services = await _setup(hass, monkeypatch, hits)
-        assert len(services) == 9, services
+        assert len(services) == 11, services
         for name, handler in services.items():
             call = SimpleNamespace(
                 data=_PAYLOAD, context=SimpleNamespace(user_id="u1")

@@ -44,6 +44,14 @@
     "bulk_delete_statistic": {
       "name": "Bulk delete statistics",
       "description": "Neutralize multiple statistics rows by overwriting them with the previous period's values."
+    },
+    "purge_statistics": {
+      "name": "Purge statistics",
+      "description": "Delete long-term (hourly) statistics older than the given number of days, for every statistic. Short-term statistics are left to the recorder's own purge, and running sums are not rebased."
+    },
+    "purge_entity_statistics": {
+      "name": "Purge entity statistics",
+      "description": "Delete long-term (hourly) statistics older than the given number of days, for the selected entities only."
     }
   }
 }

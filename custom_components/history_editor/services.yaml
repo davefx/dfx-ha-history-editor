@@ -295,3 +295,80 @@ bulk_delete_statistic:
           options:
             - long_term
             - short_term
+
+purge_statistics:
+  name: Purge Statistics
+  description: >
+    Delete long-term (hourly) statistics older than keep_days, for every
+    statistic. Home Assistant's own recorder.purge leaves the hourly table
+    alone and recorder.purge_entities does not touch statistics at all, so
+    this is the only way to trim them by age. Short-term statistics are left
+    to the recorder's own retention. Running sums are absolute totals and are
+    never rebased, so every surviving pair of rows keeps the difference the
+    energy dashboard charts. This cannot be undone: use dry_run first.
+  fields:
+    keep_days:
+      name: Keep Days
+      description: Statistics older than this many days are deleted. 0 deletes everything.
+      required: true
+      example: 730
+      selector:
+        number:
+          min: 0
+          max: 36500
+          unit_of_measurement: days
+          mode: box
+    dry_run:
+      name: Dry Run
+      description: Report what would be deleted without deleting anything.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+purge_entity_statistics:
+  name: Purge Entity Statistics
+  description: >
+    Delete long-term (hourly) statistics older than keep_days for the selected
+    entities only. At least one of entity_id, entity_globs or domains is
+    required; to purge everything use purge_statistics instead.
+  fields:
+    keep_days:
+      name: Keep Days
+      description: Statistics older than this many days are deleted. 0 deletes everything.
+      required: true
+      example: 730
+      selector:
+        number:
+          min: 0
+          max: 36500
+          unit_of_measurement: days
+          mode: box
+    entity_id:
+      name: Entities
+      description: Entities whose statistics should be purged.
+      required: false
+      selector:
+        entity:
+          multiple: true
+    entity_globs:
+      name: Entity Globs
+      description: Glob patterns matched against statistic IDs, e.g. sensor.solar_*.
+      required: false
+      example: "sensor.solar_*"
+      selector:
+        object:
+    domains:
+      name: Domains
+      description: Domains whose statistics should be purged, e.g. sensor.
+      required: false
+      example: sensor
+      selector:
+        object:
+    dry_run:
+      name: Dry Run
+      description: Report what would be deleted without deleting anything.
+      required: false
+      default: false
+      selector:
+        boolean:

@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-24
+
+### Added
+
+- Two services to purge long-term statistics by age, which Home Assistant
+  cannot do on its own: `history_editor.purge_statistics` (every statistic) and
+  `history_editor.purge_entity_statistics` (narrowed by the union of
+  `entity_id` / `entity_globs` / `domains`). HA's time-based `recorder.purge`
+  covers states, events, statistics runs and short-term statistics but leaves
+  the hourly `Statistics` table alone, and `recorder.purge_entities` never
+  touches statistics at all, so the only built-in alternative drops a statistic
+  in full. Both services take `keep_days`, report the rows deleted per
+  `statistic_id`, and support `dry_run` for checking an automation before
+  trusting it. ([#78](https://github.com/davefx/dfx-ha-history-editor/issues/78))
+
+  Deliberately out of scope, and covered by tests:
+  - only the hourly `Statistics` table is touched — short-term rows belong to
+    the recorder's own retention;
+  - `sum` is an absolute running total and is never rebased, so every surviving
+    pair of rows keeps the difference the energy dashboard charts, and exports
+    to systems like InfluxDB stay consistent;
+  - `StatisticsMeta` survives a full purge, since the recorder keeps writing new
+    rows and dropping the metadata would orphan the entity.
+
 ## [1.3.5] - 2026-08-23
 
 ### Fixed
@@ -174,6 +198,7 @@ brands CDN.
 - Statistics consistency handling: short-term/long-term recalculation and the
   running-sum cascade for `total` / `total_increasing` sensors.
 
+[1.4.0]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.5...v1.4.0
 [1.3.5]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.2...v1.3.3

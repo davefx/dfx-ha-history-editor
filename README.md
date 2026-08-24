@@ -12,6 +12,7 @@ A custom Home Assistant component that provides a powerful interface for editing
 - ➕ **Create Records**: Add new historical data points
 - 🗑️ **Delete Records**: Remove unwanted history entries
 - 📈 **Statistics Editing**: View, edit, and delete long-term and short-term statistics records
+- 🧹 **Statistics Retention**: Purge long-term statistics by age, which Home Assistant cannot do on its own
 - 🎨 **Modern UI**: Clean, responsive interface integrated into Home Assistant
 - 🔐 **Admin Only**: Requires administrator privileges for safety
 
@@ -69,7 +70,7 @@ After installation and configuration, you'll find a new "History Editor" menu it
 
 ### Services
 
-The component provides five services that can be called from automations, scripts, or Developer Tools:
+The component provides eleven services that can be called from automations, scripts, or Developer Tools:
 
 #### `history_editor.get_records`
 
@@ -191,6 +192,54 @@ data:
 
 The response is visible in **Developer Tools → Services** when "Response Data" is enabled.
 
+#### `history_editor.purge_statistics` / `history_editor.purge_entity_statistics`
+
+Delete long-term (hourly) statistics older than a given number of days.
+
+Home Assistant has no age-based trimming of long-term statistics: the time-based `recorder.purge` covers states, events and **short-term** statistics but leaves the hourly table alone, and `recorder.purge_entities` does not touch statistics at all. The only built-in alternative removes a statistic in full. These services fill that gap — keep two years of hourly data instead of forever, without losing the entity.
+
+```yaml
+# every statistic, keeping two years
+action: history_editor.purge_statistics
+data:
+  keep_days: 730
+  dry_run: true
+```
+
+```yaml
+# just the solar sensors, keeping one year
+action: history_editor.purge_entity_statistics
+data:
+  keep_days: 365
+  entity_globs:
+    - sensor.solar_*
+```
+
+**Parameters:**
+- `keep_days` (required): statistics older than this many days are deleted; `0` deletes everything
+- `dry_run` (optional, default `false`): report what would be deleted without deleting it
+- `entity_id` / `entity_globs` / `domains` (`purge_entity_statistics` only): at least one is required, and they are combined as a union
+
+**Response:**
+```json
+{
+  "success": true,
+  "dry_run": true,
+  "purge_before": "2024-08-24T00:00:00+00:00",
+  "statistics": [
+    {"statistic_id": "sensor.solar_today", "deleted": 8760}
+  ],
+  "total_deleted": 8760
+}
+```
+
+**What these services do not do:**
+- **Short-term statistics are left alone.** They belong to the recorder's own retention (10 days by default), and by any cutoff worth using here they are long gone.
+- **Running sums are never rebased.** `sum` is an absolute running total, so surviving rows keep theirs and every remaining pair keeps the difference the energy dashboard charts. Rebasing would shift every historical total and break exports to systems like InfluxDB.
+- **The statistic itself is not removed.** Its metadata survives a full purge, so the recorder carries on writing new rows.
+
+⚠️ This cannot be undone. Run it with `dry_run: true` first.
+
 ## Use Cases
 
 - **Data Correction**: Fix incorrect sensor readings or state values
@@ -199,6 +248,7 @@ The response is visible in **Developer Tools → Services** when "Response Data"
 - **Cleanup**: Remove erroneous or duplicate entries from your database
 - **Migration**: Import historical data from other systems
 - **Statistics Repair**: Correct or remove wrong statistics data that persists beyond the normal history retention period
+- **Statistics Retention**: Trim long-term statistics by age, which Home Assistant itself cannot do
 
 ## Important Notes
 

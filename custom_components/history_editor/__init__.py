@@ -42,6 +42,7 @@ from .statistics import (
     delete_short_term_stats_by_state_id,
     delete_statistic_sync,
     get_statistics_sync,
+    purge_statistics_sync,
     recalculate_statistics_sync,
     update_statistic_sync,
     update_statistics_after_state_change,
@@ -60,6 +61,8 @@ SERVICE_BULK_UPDATE_RECORD = "bulk_update_record"
 SERVICE_BULK_DELETE_RECORD = "bulk_delete_record"
 SERVICE_BULK_UPDATE_STATISTIC = "bulk_update_statistic"
 SERVICE_BULK_DELETE_STATISTIC = "bulk_delete_statistic"
+SERVICE_PURGE_STATISTICS = "purge_statistics"
+SERVICE_PURGE_ENTITY_STATISTICS = "purge_entity_statistics"
 
 
 def _set_state_timestamps(
@@ -161,6 +164,28 @@ SERVICE_BULK_UPDATE_STATISTIC_SCHEMA = vol.Schema({
     vol.Optional("sum"): vol.Coerce(float),
     vol.Optional("state"): vol.Coerce(float),
 })
+
+# Long-term statistics purge (issue #78).  keep_days mirrors the recorder's own
+# purge services; dry_run reports what would go without touching anything,
+# since the operation is irreversible.
+_PURGE_COMMON = {
+    vol.Required("keep_days"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+    vol.Optional("dry_run", default=False): cv.boolean,
+}
+
+SERVICE_PURGE_STATISTICS_SCHEMA = vol.Schema(_PURGE_COMMON)
+
+# Targeted variant.  A selector is required: purging every statistic is what
+# purge_statistics is for, and must not happen here by omission.
+SERVICE_PURGE_ENTITY_STATISTICS_SCHEMA = vol.All(
+    vol.Schema({
+        **_PURGE_COMMON,
+        vol.Optional("entity_id"): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Optional("entity_globs"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("domains"): vol.All(cv.ensure_list, [cv.string]),
+    }),
+    cv.has_at_least_one_key("entity_id", "entity_globs", "domains"),
+)
 
 SERVICE_BULK_DELETE_STATISTIC_SCHEMA = vol.Schema({
     vol.Required("ids"): vol.All(cv.ensure_list, [cv.positive_int], vol.Length(min=1)),
@@ -1202,6 +1227,31 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         _fire_statistics_events(hass)
         return result
 
+    async def _purge_statistics(call: ServiceCall, filtered: bool) -> ServiceResponse:
+        """Shared body for both purge services."""
+        result = await get_instance(hass).async_add_executor_job(
+            purge_statistics_sync,
+            hass,
+            call.data["keep_days"],
+            call.data.get("entity_id") if filtered else None,
+            call.data.get("entity_globs") if filtered else None,
+            call.data.get("domains") if filtered else None,
+            call.data.get("dry_run", False),
+        )
+        if not result.get("success"):
+            raise HomeAssistantError(result.get("error") or "Failed to purge statistics")
+        return result
+
+    async def purge_statistics(call: ServiceCall) -> ServiceResponse:
+        """Purge long-term statistics older than keep_days, for every statistic."""
+        await _require_admin_service(hass, call)
+        return await _purge_statistics(call, filtered=False)
+
+    async def purge_entity_statistics(call: ServiceCall) -> ServiceResponse:
+        """Purge long-term statistics older than keep_days, for selected entities."""
+        await _require_admin_service(hass, call)
+        return await _purge_statistics(call, filtered=True)
+
     # Register services
     hass.services.async_register(
         DOMAIN, SERVICE_GET_RECORDS, get_records, schema=SERVICE_GET_RECORDS_SCHEMA,
@@ -1239,6 +1289,17 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.services.async_register(
         DOMAIN, SERVICE_BULK_DELETE_STATISTIC, bulk_delete_statistic,
         schema=SERVICE_BULK_DELETE_STATISTIC_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_PURGE_STATISTICS, purge_statistics,
+        schema=SERVICE_PURGE_STATISTICS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_PURGE_ENTITY_STATISTICS, purge_entity_statistics,
+        schema=SERVICE_PURGE_ENTITY_STATISTICS_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 

@@ -44,6 +44,14 @@
     "bulk_delete_statistic": {
       "name": "Eliminación masiva de estadísticas",
       "description": "Neutraliza múltiples filas de estadísticas sobrescribiéndolas con los valores del período anterior."
+    },
+    "purge_statistics": {
+      "name": "Purgar estadísticas",
+      "description": "Elimina las estadísticas de largo plazo (horarias) más antiguas que el número de días indicado, para todas las estadísticas. Las de corto plazo las sigue gestionando la purga del recorder, y las sumas acumuladas no se recalculan."
+    },
+    "purge_entity_statistics": {
+      "name": "Purgar estadísticas de entidades",
+      "description": "Elimina las estadísticas de largo plazo (horarias) más antiguas que el número de días indicado, solo para las entidades seleccionadas."
     }
   }
 }

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from fnmatch import fnmatch
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -1088,6 +1089,138 @@ def bulk_delete_statistic_sync(
             }
     except Exception as err:
         _LOGGER.error("Error in bulk_delete_statistic: %s", err, exc_info=True)
+        return {"success": False, "error": str(err)}
+
+
+def _statistic_id_matches(
+    statistic_id: str,
+    entity_id: list[str] | None,
+    entity_globs: list[str] | None,
+    domains: list[str] | None,
+) -> bool:
+    """True when *statistic_id* is covered by any of the selectors.
+
+    Selectors are a union, mirroring ``recorder.purge_entities``.  Domain
+    matching only applies to ``domain.object_id`` style ids: external
+    statistics are named ``source:name`` (``energy:solar_production``), and a
+    domain filter must not sweep those up just because the prefix matches.
+    """
+    if entity_id and statistic_id in entity_id:
+        return True
+    if entity_globs and any(fnmatch(statistic_id, pattern) for pattern in entity_globs):
+        return True
+    if domains and "." in statistic_id and statistic_id.split(".", 1)[0] in domains:
+        return True
+    return False
+
+
+def purge_statistics_sync(
+    hass: HomeAssistant,
+    keep_days: int,
+    entity_id: list[str] | None = None,
+    entity_globs: list[str] | None = None,
+    domains: list[str] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Delete long-term statistics rows older than *keep_days* days.
+
+    Home Assistant has no age-based trimming of long-term statistics: the
+    time-based ``recorder.purge`` covers states, events, statistics runs and
+    short-term statistics but leaves the hourly ``Statistics`` table alone, and
+    ``recorder.purge_entities`` never touches statistics at all.  The only
+    built-in alternative drops a statistic in full (issue #78).
+
+    Only the hourly ``Statistics`` table is touched.  Short-term rows belong to
+    the recorder's own retention, and by any cutoff worth using here they are
+    long gone anyway.
+
+    ``sum`` is an absolute running total, so surviving rows keep theirs
+    untouched: every remaining pair keeps the difference the energy dashboard
+    and other consumers chart.  Rebasing the series would shift every
+    historical total and break exports.
+
+    ``StatisticsMeta`` rows are kept even when every one of their statistics
+    rows goes, since the recorder keeps writing new ones and dropping the
+    metadata would orphan the entity.
+
+    With no selector every statistic is covered.  Passing any of *entity_id*,
+    *entity_globs* or *domains* narrows it to their union.
+
+    Returns the per-statistic counts, so an irreversible operation reports what
+    it did.  With *dry_run* the same counts are returned and nothing is deleted.
+    """
+    schema_err = _check_schema(hass)
+    if schema_err:
+        return schema_err
+    if not HAS_STATISTICS:
+        return {"success": False, "error": "Statistics tables not available in this HA version"}
+
+    try:
+        keep_days = int(keep_days)
+    except (TypeError, ValueError):
+        return {"success": False, "error": "keep_days must be an integer"}
+    if keep_days < 0:
+        return {"success": False, "error": "keep_days must be zero or greater"}
+
+    recorder = get_instance(hass)
+    if recorder is None:
+        return {"success": False, "error": "Recorder not available"}
+
+    purge_before = dt_util.utcnow() - timedelta(days=keep_days)
+    purge_before_ts = purge_before.timestamp()
+    filtered = bool(entity_id or entity_globs or domains)
+
+    try:
+        with recorder.get_session() as session:
+            metas = session.query(StatisticsMeta).all()
+
+            per_statistic: list[dict[str, Any]] = []
+            total_deleted = 0
+
+            for meta in metas:
+                if filtered and not _statistic_id_matches(
+                    meta.statistic_id, entity_id, entity_globs, domains,
+                ):
+                    continue
+
+                doomed = session.query(Statistics).filter(
+                    Statistics.metadata_id == meta.id,
+                    Statistics.start_ts < purge_before_ts,
+                )
+                count = doomed.count()
+                if not count:
+                    continue
+
+                if not dry_run:
+                    # Bounded by metadata_id + start_ts, so this is a single
+                    # statement with no bind-variable list to chunk.
+                    doomed.delete(synchronize_session=False)
+
+                per_statistic.append(
+                    {"statistic_id": meta.statistic_id, "deleted": count}
+                )
+                total_deleted += count
+
+            if not dry_run:
+                session.commit()
+            # A dry run only counts, so there is nothing to roll back -- and
+            # rolling back a session we share with the recorder would discard
+            # whatever else is pending on it.
+
+            _LOGGER.info(
+                "%s %d long-term statistics rows across %d statistic(s) older than %s",
+                "Would purge" if dry_run else "Purged",
+                total_deleted, len(per_statistic), purge_before.isoformat(),
+            )
+            return {
+                "success": True,
+                "dry_run": dry_run,
+                "purge_before": purge_before.isoformat(),
+                "statistics": per_statistic,
+                "total_deleted": total_deleted,
+            }
+    except Exception as err:
+        _LOGGER.error("Error in purge_statistics: %s", err, exc_info=True)
         return {"success": False, "error": str(err)}
 
 

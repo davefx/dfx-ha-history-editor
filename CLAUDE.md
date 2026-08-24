@@ -67,8 +67,10 @@ Both wrap the same `_*_sync` function via `hass.async_add_executor_job(...)`. Wh
 | Bulk delete states | `bulk_delete_record` | `POST /api/history_editor/bulk_delete` | `_bulk_delete_record_sync` |
 | Bulk update stats | `bulk_update_statistic` | `POST /api/history_editor/statistics/bulk_update` | `bulk_update_statistic_sync` |
 | Bulk delete stats | `bulk_delete_statistic` | `POST /api/history_editor/statistics/bulk_delete` | `bulk_delete_statistic_sync` |
+| Purge stats by age | `purge_statistics` | — | `purge_statistics_sync` |
+| Purge stats by age (targeted) | `purge_entity_statistics` | — | `purge_statistics_sync` |
 
-`get_records` and `recalculate_statistics` use `SupportsResponse.ONLY` so their results are visible in Dev Tools; the mutation services return `None` and raise `HomeAssistantError` on failure (so automations see the error). State-mutation responses include a `statistics_stale: bool` flag that is set to `true` if the main DB op succeeded but the follow-up statistics recalc failed — callers can then re-run `history_editor.recalculate_statistics` to fix the drift.
+`get_records`, `recalculate_statistics` and the two `purge_*` services use `SupportsResponse.ONLY` so their results are visible in Dev Tools; the mutation services return `None` and raise `HomeAssistantError` on failure (so automations see the error). State-mutation responses include a `statistics_stale: bool` flag that is set to `true` if the main DB op succeeded but the follow-up statistics recalc failed — callers can then re-run `history_editor.recalculate_statistics` to fix the drift.
 
 ### Module layout
 
@@ -96,6 +98,20 @@ Ordering invariant in `update_statistics_after_state_change`: short-term periods
 The same invariant applies to `recalculate_statistics_sync` across the phase boundary: it commits + expires between the short-term and long-term loops, and chunks commits inside each loop (`RECALC_CHUNK_SHORT_TERM = 288`, `RECALC_CHUNK_LONG_TERM = 24`) to bound the recorder write-lock duration on bulk recalcs.
 
 `recalculate_statistics` only **updates existing** statistics rows — it never inserts new ones. HA's recorder is still responsible for creating rows on its normal schedule.
+
+### Purging long-term statistics
+
+`purge_statistics_sync` backs both `history_editor.purge_statistics` (everything) and `history_editor.purge_entity_statistics` (narrowed by the union of `entity_id` / `entity_globs` / `domains`). It fills a real gap: HA's time-based `recorder.purge` covers states, events, statistics runs and **short-term** statistics but leaves the hourly `Statistics` table alone, and `recorder.purge_entities` never touches statistics at all — the only built-in alternative, `recorder/clear_statistics`, drops a statistic in full (issue #78).
+
+Three rules the tests pin down, all deliberate:
+
+- **Only the hourly `Statistics` table** is touched; short-term rows belong to the recorder's own retention.
+- **`sum` is never rebased.** It is an absolute running total, so leaving surviving rows alone keeps every remaining pair's difference correct — which is what the energy dashboard charts. Rebasing would shift every historical total and corrupt exports to systems like InfluxDB.
+- **`StatisticsMeta` rows survive** a full purge, because the recorder keeps writing new rows and dropping the metadata would orphan the entity.
+
+Domain matching applies only to `domain.object_id` ids: external statistics are named `source:name` (`energy:solar_production`), and a domain filter must not sweep those up on a prefix match. An unfiltered purge does cover them.
+
+`dry_run` counts without deleting, and must never `session.rollback()` — the session is shared with the recorder, so a rollback would discard whatever else is pending on it.
 
 ### Bulk operations and the dedupe-cascade pattern
 

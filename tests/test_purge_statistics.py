@@ -59,6 +59,18 @@ def _add_hours(session, meta_id, now_ts, days_ago_list):
     return rows
 
 
+def _add_many_hours(session, meta_id, now_ts, count, days_ago=400):
+    """`count` consecutive hourly rows, all older than `days_ago`."""
+    base = now_ts - days_ago * DAY
+    for i in range(count):
+        session.add(Statistics(
+            metadata_id=meta_id, start_ts=base - i * 3600.0,
+            mean=float(i), min=float(i), max=float(i),
+            state=float(i), sum=float(i),
+        ))
+    session.flush()
+
+
 def _remaining(session, table, meta_id):
     return (session.query(table)
             .filter(table.metadata_id == meta_id)
@@ -301,3 +313,71 @@ def test_filter_matching_nothing_deletes_nothing(db_session, mock_hass, now_ts):
     assert result["total_deleted"] == 0
     db_session.expire_all()
     assert len(_remaining(db_session, Statistics, a.id)) == 1
+
+
+# --------------------------------------------------------------------------
+# Write-lock duration.  Reported on #78 against a production database: the
+# recorder's own writes failed with "database is locked" while a large purge
+# ran, because the whole delete was one transaction with a single commit at
+# the end.  Bulk recalculation already chunks its commits for exactly this
+# reason (RECALC_CHUNK_SHORT_TERM); the purge has to as well.
+# --------------------------------------------------------------------------
+
+def _count_commits(db_session, monkeypatch):
+    commits = []
+    original = db_session.commit
+
+    def counting_commit():
+        commits.append(1)
+        return original()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+    return commits
+
+
+def test_large_purge_commits_in_chunks(db_session, mock_hass, now_ts, monkeypatch):
+    from custom_components.history_editor import statistics as stats_mod
+
+    monkeypatch.setattr(stats_mod, "PURGE_CHUNK_SIZE", 50)
+    meta = _add_meta(db_session, "sensor.energy")
+    _add_many_hours(db_session, meta.id, now_ts, 220)
+    commits = _count_commits(db_session, monkeypatch)
+
+    result = purge_statistics_sync(mock_hass, keep_days=90)
+
+    assert result["total_deleted"] == 220
+    # 220 rows in chunks of 50 cannot be one long write transaction.
+    assert len(commits) >= 4, f"only {len(commits)} commit(s)"
+    db_session.expire_all()
+    assert _remaining(db_session, Statistics, meta.id) == []
+
+
+def test_chunking_is_bounded_by_the_recorder_bind_var_limit(
+    db_session, mock_hass, now_ts, monkeypatch,
+):
+    """Deleting by primary key means one bind variable per row, so the chunk
+    must never exceed what the database driver accepts."""
+    from custom_components.history_editor import statistics as stats_mod
+
+    monkeypatch.setattr(stats_mod, "PURGE_CHUNK_SIZE", 10_000)
+    recorder = stats_mod.get_instance(mock_hass)
+    monkeypatch.setattr(recorder, "max_bind_vars", 40, raising=False)
+
+    meta = _add_meta(db_session, "sensor.energy")
+    _add_many_hours(db_session, meta.id, now_ts, 130)
+    commits = _count_commits(db_session, monkeypatch)
+
+    result = purge_statistics_sync(mock_hass, keep_days=90)
+
+    assert result["total_deleted"] == 130
+    assert len(commits) >= 4, f"only {len(commits)} commit(s)"
+
+
+def test_dry_run_takes_no_write_lock(db_session, mock_hass, now_ts, monkeypatch):
+    meta = _add_meta(db_session, "sensor.energy")
+    _add_many_hours(db_session, meta.id, now_ts, 20)
+    commits = _count_commits(db_session, monkeypatch)
+
+    purge_statistics_sync(mock_hass, keep_days=90, dry_run=True)
+
+    assert commits == []

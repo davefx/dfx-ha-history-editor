@@ -58,6 +58,14 @@ LONG_TERM_PERIOD_SECONDS = 3600    # 1-hour long-term statistics
 RECALC_CHUNK_SHORT_TERM = 288
 RECALC_CHUNK_LONG_TERM = 24
 
+# Purge chunk size: delete this many statistics rows per transaction.  A purge
+# can span years of hourly rows, and doing it in one transaction holds the
+# recorder's write lock for its whole duration -- on SQLite that surfaces as
+# "database is locked" on the recorder's own writes (issue #78).  Clamped at
+# runtime by the recorder's max_bind_vars, since rows are deleted by primary
+# key and each one costs a bind variable.
+PURGE_CHUNK_SIZE = 1000
+
 
 def delete_short_term_stats_by_state_id(session, state_id: int) -> int:
     """Delete short-term statistics rows that reference the given state_id.
@@ -1148,6 +1156,13 @@ def purge_statistics_sync(
 
     Returns the per-statistic counts, so an irreversible operation reports what
     it did.  With *dry_run* the same counts are returned and nothing is deleted.
+
+    Rows are deleted in committed chunks of ``PURGE_CHUNK_SIZE``.  A purge can
+    span years of hourly rows, and holding one transaction for all of them locks
+    the recorder out of its own writes for the duration -- on SQLite that
+    surfaces as ``database is locked``.  The trade-off is that a purge
+    interrupted halfway leaves the chunks it already committed deleted, which
+    matches how the recorder's own purge behaves.
     """
     schema_err = _check_schema(hass)
     if schema_err:
@@ -1172,40 +1187,67 @@ def purge_statistics_sync(
 
     try:
         with recorder.get_session() as session:
-            metas = session.query(StatisticsMeta).all()
+            # Snapshot the metadata up front: committing each chunk expires
+            # the ORM objects, and re-loading them per access would issue a
+            # SELECT for every chunk.
+            metas = session.query(
+                StatisticsMeta.id, StatisticsMeta.statistic_id,
+            ).all()
 
             per_statistic: list[dict[str, Any]] = []
             total_deleted = 0
 
-            for meta in metas:
+            # Deleting by primary key costs one bind variable per row, so the
+            # chunk can never exceed what the driver accepts.  Older recorders
+            # do not expose the limit; fall back to our own chunk size.
+            max_bind_vars = getattr(recorder, "max_bind_vars", None)
+            if not isinstance(max_bind_vars, int) or max_bind_vars < 1:
+                max_bind_vars = PURGE_CHUNK_SIZE
+            chunk_size = max(1, min(PURGE_CHUNK_SIZE, max_bind_vars))
+
+            for meta_id, statistic_id in metas:
                 if filtered and not _statistic_id_matches(
-                    meta.statistic_id, entity_id, entity_globs, domains,
+                    statistic_id, entity_id, entity_globs, domains,
                 ):
                     continue
 
                 doomed = session.query(Statistics).filter(
-                    Statistics.metadata_id == meta.id,
+                    Statistics.metadata_id == meta_id,
                     Statistics.start_ts < purge_before_ts,
                 )
-                count = doomed.count()
-                if not count:
-                    continue
 
-                if not dry_run:
-                    # Bounded by metadata_id + start_ts, so this is a single
-                    # statement with no bind-variable list to chunk.
-                    doomed.delete(synchronize_session=False)
+                if dry_run:
+                    count = doomed.count()
+                    if not count:
+                        continue
+                else:
+                    # Delete in committed chunks so the recorder's own writes
+                    # are never locked out for the length of the whole purge.
+                    count = 0
+                    while True:
+                        ids = [
+                            row_id for (row_id,) in
+                            doomed.with_entities(Statistics.id).limit(chunk_size).all()
+                        ]
+                        if not ids:
+                            break
+                        session.query(Statistics).filter(
+                            Statistics.id.in_(ids)
+                        ).delete(synchronize_session=False)
+                        session.commit()
+                        count += len(ids)
+                    if not count:
+                        continue
 
                 per_statistic.append(
-                    {"statistic_id": meta.statistic_id, "deleted": count}
+                    {"statistic_id": statistic_id, "deleted": count}
                 )
                 total_deleted += count
 
-            if not dry_run:
-                session.commit()
-            # A dry run only counts, so there is nothing to roll back -- and
-            # rolling back a session we share with the recorder would discard
-            # whatever else is pending on it.
+            # Every chunk already committed itself, and a dry run only counts:
+            # there is nothing left to commit here.  A dry run must not roll
+            # back either -- the session is shared with the recorder, so that
+            # would discard whatever else is pending on it.
 
             _LOGGER.info(
                 "%s %d long-term statistics rows across %d statistic(s) older than %s",

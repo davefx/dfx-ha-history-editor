@@ -122,6 +122,9 @@ def mock_hass(db_session, monkeypatch):
     recorder_stub = MagicMock()
     recorder_stub.get_session.side_effect = _SessionCtx
     recorder_stub.keep_days = 10
+    # Mirror the real Recorder: a plain int, not a Mock, so chunk-size
+    # clamping is exercised the way it runs in production.
+    recorder_stub.max_bind_vars = 1000
 
     from custom_components import history_editor as pkg_module
     from custom_components.history_editor import statistics as stats_module

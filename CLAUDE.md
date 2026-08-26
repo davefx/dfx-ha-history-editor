@@ -111,6 +111,8 @@ Three rules the tests pin down, all deliberate:
 
 Domain matching applies only to `domain.object_id` ids: external statistics are named `source:name` (`energy:solar_production`), and a domain filter must not sweep those up on a prefix match. An unfiltered purge does cover them.
 
+Rows are deleted in committed chunks of `PURGE_CHUNK_SIZE` (1000, clamped by the recorder's `max_bind_vars` since rows go by primary key). One transaction for a multi-year purge holds the recorder's write lock for its whole duration, which surfaces as `database is locked` on the recorder's own writes — reported against a production database on issue #78. The accepted trade-off is that an interrupted purge leaves committed chunks deleted, as HA's own purge does.
+
 `dry_run` counts without deleting, and must never `session.rollback()` — the session is shared with the recorder, so a rollback would discard whatever else is pending on it.
 
 ### Bulk operations and the dedupe-cascade pattern

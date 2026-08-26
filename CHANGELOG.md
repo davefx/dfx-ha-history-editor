@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-08-26
+
+### Fixed
+
+- The statistics purge now deletes in committed chunks instead of one long
+  transaction. A purge spanning years of hourly rows held the recorder's write
+  lock for its whole duration, and Home Assistant logged
+  `database is locked` on its own writes while it ran. Chunk size is 1000 rows,
+  clamped by the recorder's `max_bind_vars`. Reported against a production
+  database on [#78](https://github.com/davefx/dfx-ha-history-editor/issues/78).
+
 ## [1.4.0] - 2026-08-24
 
 ### Added
@@ -198,6 +209,7 @@ brands CDN.
 - Statistics consistency handling: short-term/long-term recalculation and the
   running-sum cascade for `total` / `total_increasing` sensors.
 
+[1.4.1]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.5...v1.4.0
 [1.3.5]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.3...v1.3.4

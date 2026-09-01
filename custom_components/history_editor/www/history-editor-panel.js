@@ -174,6 +174,7 @@ class HistoryEditorPanel extends HTMLElement {
     this._scrollObserver = null;  // IntersectionObserver for scroll sentinel
     this._topObserver = null;     // IntersectionObserver for load-prev row
     this._mutationObserver = null; // MutationObserver to detect DOM clearing
+    this._hostResizeHandler = null; // window 'resize' handler that keeps our height current
     // Bulk-selection state.  Set of state_id (states mode) or stat id
     // (statistics mode).  Persists across reloads within the same data
     // source / entity; cleared when those change.
@@ -185,6 +186,33 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._debugMode) {
       console.log(...args);
     }
+  }
+
+  // Compute and apply an explicit pixel height for the host element.
+  //
+  // `height: 100%` (set alongside this in renderPanel()/_showWarning()) only
+  // resolves to a usable value when every ancestor up to the viewport has a
+  // *definite* height. In some Home Assistant frontend versions/layouts the
+  // element panel_custom mounts panels into does not establish one (its own
+  // height is itself content-derived), so `height: 100%` silently collapses
+  // to `auto`. When that happens this host - and therefore .table-container
+  // inside it - never gets a bounded box, so `.table-container`'s
+  // `overflow: auto` never has anything to do: the table just grows to fit
+  // all of its rows, pushing content past the bottom of the viewport with no
+  // scrollbar anywhere able to reach it (reported upstream as "unable to
+  // scroll the table").
+  //
+  // Anchoring to window.innerHeight and this element's own viewport offset
+  // sidesteps the whole percentage-height chain and guarantees a real,
+  // bounded, scrollable box regardless of what the ancestors do. Where
+  // `height: 100%` already resolved correctly this computes the same pixel
+  // value, so it is a no-op in practice on setups that were not affected.
+  _updateHostHeight() {
+    const top = this.getBoundingClientRect().top;
+    const height = window.innerHeight - top;
+    // A non-positive result means the element isn't laid out yet (e.g. still
+    // display:none) - keep the percentage fallback rather than collapsing it.
+    this.style.height = height > 0 ? `${height}px` : '100%';
   }
 
   _t(key, params) {
@@ -238,6 +266,14 @@ class HistoryEditorPanel extends HTMLElement {
       };
       document.addEventListener('visibilitychange', this._visibilityHandler);
     }
+    // Keep the host's computed pixel height (see _updateHostHeight()) current
+    // as the window resizes or the sidebar collapses/expands - both change
+    // how much vertical space is actually available without necessarily
+    // firing anything else we already listen for.
+    if (!this._hostResizeHandler) {
+      this._hostResizeHandler = () => this._updateHostHeight();
+      window.addEventListener('resize', this._hostResizeHandler);
+    }
   }
 
   disconnectedCallback() {
@@ -246,6 +282,10 @@ class HistoryEditorPanel extends HTMLElement {
     if (this._visibilityHandler) {
       document.removeEventListener('visibilitychange', this._visibilityHandler);
       this._visibilityHandler = null;
+    }
+    if (this._hostResizeHandler) {
+      window.removeEventListener('resize', this._hostResizeHandler);
+      this._hostResizeHandler = null;
     }
     // Clean up mutation observer
     if (this._mutationObserver) {
@@ -408,6 +448,9 @@ class HistoryEditorPanel extends HTMLElement {
     this.style.padding = '16px';
     this.style.background = 'var(--primary-background-color)';
     this.style.color = 'var(--primary-text-color)';
+    // See _updateHostHeight() - replaces the '100%' fallback above with a
+    // computed pixel value that doesn't depend on the ancestor chain.
+    this._updateHostHeight();
 
     this.innerHTML = `
       <style>
@@ -503,6 +546,10 @@ class HistoryEditorPanel extends HTMLElement {
     this.style.padding = '16px';
     this.style.background = 'var(--primary-background-color)';
     this.style.color = 'var(--primary-text-color)';
+    // 'height: 100%' above is a fallback; replace it with a computed pixel
+    // height that does not depend on the ancestor chain resolving percentage
+    // heights correctly. See _updateHostHeight() for why this matters.
+    this._updateHostHeight();
 
     this._debugLog('[HistoryEditor] Setting innerHTML to render panel UI');
     this.innerHTML = `

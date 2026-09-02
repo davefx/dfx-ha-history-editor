@@ -207,11 +207,29 @@ class HistoryEditorPanel extends HTMLElement {
   // bounded, scrollable box regardless of what the ancestors do. Where
   // `height: 100%` already resolved correctly this computes the same pixel
   // value, so it is a no-op in practice on setups that were not affected.
+  // Measuring only means anything once we are in the document. HA mounts
+  // custom panels by setting properties first and appending afterwards
+  // (frontend src/panels/custom/ha-panel-custom.ts, _createPanel), so the
+  // whole hass -> _ensureInitialized -> renderPanel chain runs while this
+  // element is still detached. getBoundingClientRect() is all zeroes there,
+  // which yields exactly window.innerHeight - a positive number, so a
+  // `height > 0` check does not catch it - and pins the host to the full
+  // viewport height no matter where it actually sits. connectedCallback()
+  // re-measures once we are attached.
   _updateHostHeight() {
+    if (!this.isConnected) {
+      this.style.height = '100%';
+      return;
+    }
     const top = this.getBoundingClientRect().top;
-    const height = window.innerHeight - top;
-    // A non-positive result means the element isn't laid out yet (e.g. still
-    // display:none) - keep the percentage fallback rather than collapsing it.
+    // Clamp both ends. A negative top (host scrolled above the fold) would
+    // make us taller than the viewport, which is the very condition that puts
+    // content out of reach of every scrollbar; a top past the bottom of the
+    // viewport would produce a non-positive height.
+    const height = Math.min(
+      window.innerHeight,
+      window.innerHeight - Math.max(0, top),
+    );
     this.style.height = height > 0 ? `${height}px` : '100%';
   }
 
@@ -267,13 +285,20 @@ class HistoryEditorPanel extends HTMLElement {
       document.addEventListener('visibilitychange', this._visibilityHandler);
     }
     // Keep the host's computed pixel height (see _updateHostHeight()) current
-    // as the window resizes or the sidebar collapses/expands - both change
-    // how much vertical space is actually available without necessarily
-    // firing anything else we already listen for.
+    // as the window resizes. Note this does not cover layout shifts that move
+    // us vertically without resizing the window - a repairs banner appearing
+    // above the panel, the toolbar showing or hiding - which leave a stale,
+    // too-tall height until the next resize or re-render. Covering those needs
+    // a ResizeObserver on the layout above us; not done here.
     if (!this._hostResizeHandler) {
       this._hostResizeHandler = () => this._updateHostHeight();
       window.addEventListener('resize', this._hostResizeHandler);
     }
+    // The render-time call ran while we were still detached, so this is the
+    // first measurement that can see a real layout. It also re-measures after
+    // HA disconnects and reconnects us on a re-render, where
+    // _ensureInitialized() early-returns and would not otherwise recompute.
+    this._updateHostHeight();
   }
 
   disconnectedCallback() {

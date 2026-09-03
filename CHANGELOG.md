@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-09-03
+
+### Fixed
+
+- The records table could not be scrolled: the panel host was sized with
+  `height: 100%`, which only resolves when every ancestor up to the viewport
+  has a definite height. On layouts where Home Assistant's panel container does
+  not establish one, the host collapsed to `auto`, so `.table-container`'s
+  `overflow: auto` had nothing to bound and the table simply grew past the
+  bottom of the viewport with no scrollbar able to reach it. The host now gets
+  an explicit pixel height computed from `window.innerHeight` and its own
+  viewport offset, which sidesteps the percentage-height chain entirely.
+  Thanks to [@m-l](https://github.com/m-l) for the report and the fix
+  ([#80](https://github.com/davefx/dfx-ha-history-editor/pull/80)).
+
+  The height is measured once the element is attached to the document, not
+  while Home Assistant is still mounting it — HA sets a custom panel's
+  properties before appending it, and `getBoundingClientRect()` on a detached
+  element reads all zeroes, which would have pinned the host to the full
+  viewport height regardless of its real offset and clipped the bottom of the
+  table wherever the panel does not start at the top of the window.
+
 ## [1.4.1] - 2026-08-26
 
 ### Fixed
@@ -209,6 +231,7 @@ brands CDN.
 - Statistics consistency handling: short-term/long-term recalculation and the
   running-sum cascade for `total` / `total_increasing` sensors.
 
+[1.4.2]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.5...v1.4.0
 [1.3.5]: https://github.com/davefx/dfx-ha-history-editor/compare/v1.3.4...v1.3.5
